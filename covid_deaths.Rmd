@@ -1,0 +1,917 @@
+---
+title: "COVID death analysis"
+author: "MaryJo Webster"
+date:  "Last updated: `r Sys.Date()`"
+output:
+  html_document: 
+    #toc: true
+    #to_depth: 1
+    #toc_float: true
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#http://strib-data-internal.s3-us-west-1.amazonaws.com/projects/covid/covid_deaths.html
+
+```
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(stringr)
+library(kableExtra)
+library(formattable)
+library(DatawRappr)
+library(ggthemes)
+library(RMySQL)
+library(forcats)
+```
+
+
+
+```{r warning=FALSE, message=FALSE}
+subtitle <-  'First 30 weeks of year'
+wknumber <- 30
+
+#import covid death file (this needs to be vetted in Excel before pulling in)
+coviddeaths <-  read_csv('./data/covid_death_jul29.csv', col_types=cols(.default=col_character(), AGEYEARS=col_double(), DEATHDATE=col_date("%m/%d/%Y %H:%M:%S"))) %>% clean_names()
+
+
+big_group_10yrage <-  read_csv('./data/big_group_10yrage.csv')
+
+#pull in historical death data combined with 2020 data
+#note the month variable in the WHERE line that might need to be adjusted
+
+con <- dbConnect(RMySQL::MySQL(), host = Sys.getenv("host"), dbname="newsroomdata",user= Sys.getenv("userid"), password=Sys.getenv("pwd"))
+
+#list the tables in the database we've connected to
+#dbListTables(con)
+
+#list the fields in the table; change "mytablename" to the name of the table you're trying to connect to
+#dbListFields(con,'mytablename')
+
+
+#Pull selected data using query inside the parentheses
+data1 <- dbSendQuery(con, "select  deathdate, mannerdeath, ageyears, race, HISPANICETHNICITY, covidflag, deathtype, year(deathdate) as yr, month(deathdate) as mnth
+from deaths_main
+where year(deathdate)>2014 and month(deathdate)<8
+")
+
+#assign it to a new data frame
+deaths <- fetch(data1, n=-1)
+
+data2 <-  dbSendQuery(con, "select  decd_dth_dt as deathdate, certfr_manner_dth as mannerdeath, decd_age_yr as ageyears, race, HISPANICETHNICITY, covidflag, deathtype, year(decd_dth_dt) as yr, month(decd_dth_dt) as mnth
+from deaths_covid")
+
+deaths2020 <-  fetch(data2, n=-1)
+
+dbClearResult(data1)
+dbClearResult(data2)
+
+#disconnect connection
+dbDisconnect(con)
+
+
+#UNION
+#select  decd_dth_dt as deathdate, certfr_manner_dth as mannerdeath, decd_age_yr as ageyears, race, HISPANICETHNICITY, covidflag, deathtype, year(decd_dth_dt) as yr, month(decd_dth_dt) as mnth
+#from deaths_covid
+
+deaths <-  bind_rows(deaths, deaths2020)
+
+```
+
+
+```{r}
+deaths <-  deaths %>% mutate(new_date = str_sub(deathdate, 1, 10))
+
+covid_by_date <-  deaths %>% filter(year(deathdate)==2020, covidflag=='covid') %>% group_by(new_date) %>% summarise(numdeaths=n())
+```
+
+```{r, message==FALSE, warning=FALSE}
+
+
+ggplot(covid_by_date) +
+  geom_col(aes(x = new_date, y = numdeaths, stat="identity"), show.legend=FALSE) +
+  scale_x_discrete(breaks=c('2020-04-01', '2020-05-01', '2020-06-01', '2020-07-01'), labels=c('4/1', '5/1', '6/1', '7/1'))
+
+
+```
+
+```{r}
+deaths <-  deaths %>% mutate(death_date_convert = as.Date(new_date))
+                             
+deaths <-  deaths %>% mutate(wkday = weekdays(death_date_convert))
+
+
+
+
+deaths$wkday <- factor(deaths$wkday, levels=c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"))
+
+
+deaths %>% filter(year(deathdate)==2020, covidflag=='covid') %>% group_by(wkday) %>% summarise(count=n()) %>% 
+  mutate(pct = percent(count/sum(count))) %>% arrange(wkday)
+```
+
+
+
+```{r warning=FALSE, message=FALSE}
+
+
+deaths <- deaths %>% mutate(weeknumber = week(deathdate))
+
+
+
+deaths$mannerdeath[is.na(deaths$mannerdeath)] <- 'not listed'
+
+
+deaths <-  deaths %>% mutate(covid_original = covidflag)
+
+
+deaths <-  deaths %>% mutate(covidflag = case_when(covidflag=='covid'~ 'covid',
+                                                   covidflag=='influenza'~'flu',
+                                              TRUE ~'all other'))
+
+deaths <- deaths %>% mutate(covidflag = fct_relevel(covidflag, c("covid", "flu", "all other")))
+
+
+
+deaths65up <-  deaths %>% filter(ageyears>=65)
+
+deathsunder65 <-  deaths %>% filter(ageyears<65)
+
+#deaths %>% filter(covid_original=='presumed' | covid_original=='FALSE') %>% group_by(weeknumber) %>% summarise(count=n())
+
+
+
+
+
+overdoses <-  deaths %>% filter(deathtype=='overdose', weeknumber<=wknumber) %>% group_by(yr) %>% summarise(count=n())
+
+ggplot(overdoses, aes(x=yr, y=count))+
+  geom_bar(stat="identity")+
+    theme_hc()+
+      labs(title = "Overdose deaths", 
+       subtitle = subtitle,
+       caption = "source: Minnesota death certificates")
+
+ggsave("./output/overdoses.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+```{r}
+deaths %>% filter(deathtype=='overdose', weeknumber<=wknumber, yr==2020) %>% group_by(weeknumber) %>% summarise(count=n(), maxdt = max(deathdate))
+```
+
+
+```{r}
+deaths %>% group_by(yr, weeknumber) %>% summarise(count=n())
+```
+
+
+
+```{r}
+week_ending <- deaths %>% filter(yr==2020) %>% group_by(weeknumber) %>% summarise(endingdate=max(deathdate))
+```
+
+
+Notes:<br>
+The most recent two weeks shown in the charts are very likely missing death certificates. And it's also possible that overdose deaths, suicides and other deaths that might take longer to determine might not be reflected here if it happened in the most recent month.<br>
+<br>
+The last week shown in these charts starts and ends with these dates:
+```{r}
+deaths %>% filter(yr==2020, weeknumber==wknumber) %>% summarise(start=min(deathdate), end=max(deathdate)) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+
+
+```{r warning=FALSE, message=FALSE}
+byweek2020 <-  deaths %>% filter(weeknumber<=wknumber, yr==2020) %>% group_by(weeknumber, covidflag) %>% summarise(tot=n())
+
+byweek <-  deaths %>% filter(weeknumber<=wknumber) %>% group_by(yr, weeknumber) %>% summarise(tot=n())
+
+byweekavg <-  byweek %>% filter(weeknumber<=wknumber, yr>=2015 & yr<2020) %>% group_by(weeknumber) %>% summarise(avg = mean(tot))
+
+
+
+ ggplot(byweek2020)+
+geom_col(aes(x = weeknumber, y = tot, factor=covidflag, fill=covidflag, width = 0.7, stat="identity")) +
+  geom_line(data=byweekavg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("red","purple", "gray"))+
+    scale_y_continuous(name="Total deaths", limits=c(0, 1100))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+     theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Deaths by week in 2020", 
+       subtitle = "Line shows average deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+ 
+
+byweek_2020_allages <-  pivot_wider(byweek2020, names_from=covidflag, values_from=tot)
+write.csv(byweek_2020_allages, './output/byweek2020_allages_chart.csv', row.names=FALSE)
+ 
+ggsave("./output/byweek2020.jpg", width=8, height=5, units="in", dpi="print")
+
+```
+
+```{r warning=FALSE, message=FALSE}
+byweek2019 <-  deaths %>% filter(weeknumber<=wknumber, yr==2019) %>% group_by(weeknumber, covidflag) %>% summarise(tot=n())
+
+
+
+ggplot(byweek2019)+
+geom_col(aes(x = weeknumber, y = tot, factor=covidflag, fill=covidflag, width = 0.7, stat="identity")) +
+  geom_line(data=byweekavg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("purple", "gray"))+
+    scale_y_continuous(name="Total deaths", limits=c(0, 1100))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+    theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Deaths by week in 2019", 
+       subtitle = "Line shows average deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+ 
+
+ggsave("./output/byweek2019.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+```{r warning=FALSE, message=FALSE}
+byweek2018 <-  deaths %>% filter(weeknumber<=wknumber, yr==2018) %>% group_by(weeknumber, covidflag) %>% summarise(tot=n())
+
+
+
+ggplot(byweek2018)+
+geom_col(aes(x = weeknumber, y = tot, factor=covidflag, fill=covidflag, width = 0.7, stat="identity")) +
+  geom_line(data=byweekavg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("purple", "gray"))+
+    scale_y_continuous(name="Total deaths", limits=c(0, 1100))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+    theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Deaths by week in 2018", 
+       subtitle = "Line shows average deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+ 
+
+ggsave("./output/byweek2018.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+```{r warning=FALSE, message=FALSE}
+deaths <-  deaths %>% mutate(mannerdeath2 = case_when(covidflag=='covid'~ 'covid',
+                                                      covidflag!='covid' & mannerdeath %in% c("COULD NOT BE DETERMINED", "PENDING INVESTIGATION") ~'NOT DETERMINED OR PENDING',
+                                                    is.na(mannerdeath) | mannerdeath=='' ~'NOT DETERMINED OR PENDING',
+TRUE ~ mannerdeath))
+
+
+
+
+deaths <- deaths %>% mutate(mannerdeath2 = fct_relevel(mannerdeath2, c("NOT DETERMINED OR PENDING","HOMICIDE","SUICIDE", "ACCIDENT", "covid", "NATURAL" )))
+
+byweek_manner_2020 <-  deaths %>% filter(weeknumber<=wknumber, yr==2020) %>% group_by(weeknumber, mannerdeath2) %>% summarise(tot=n())
+
+byweek_natural <-  deaths %>% filter(weeknumber<=wknumber, mannerdeath2=='NATURAL') %>% group_by(yr, weeknumber) %>% summarise(tot=n())
+
+byweek_natural_avg <-  byweek_natural %>% filter(weeknumber<=wknumber, yr>=2015 & yr<2020) %>% group_by(weeknumber) %>% summarise(avg = mean(tot))
+
+
+
+ggplot(byweek_manner_2020)+
+geom_col(aes(x = weeknumber, y = tot, factor=mannerdeath2, fill=mannerdeath2, width = 0.7, stat="identity")) +
+  geom_line(data=byweek_natural_avg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("green", "#e6550d","#4d4d4d","#999999", "red", "#e0e0e0" ))+
+    scale_y_continuous(name="Total deaths", limits=c(0, 1100))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+    theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Deaths by manner of death, by week in 2020", 
+       subtitle = "Line shows average natural deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+ 
+
+ggsave("./output/byweek_bymanner_2020.jpg", width=8, height=5, units="in", dpi="print")
+
+
+```
+
+```{r warning=FALSE, message=FALSE}
+
+byweek_manner_2019 <-  deaths %>% filter(weeknumber<=wknumber, yr==2019) %>% group_by(weeknumber, mannerdeath2) %>% summarise(tot=n())
+
+byweek_natural <-  deaths %>% filter(weeknumber<=wknumber, mannerdeath2=='NATURAL') %>% group_by(yr, weeknumber) %>% summarise(tot=n())
+
+byweek_natural_avg <-  byweek_natural %>% filter(weeknumber<=wknumber, yr>=2015 & yr<2020) %>% group_by(weeknumber) %>% summarise(avg = mean(tot))
+
+
+
+ggplot(byweek_manner_2019)+
+geom_col(aes(x = weeknumber, y = tot, factor=mannerdeath2, fill=mannerdeath2, width = 0.7, stat="identity")) +
+  geom_line(data=byweek_natural_avg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c( "green", "#e6550d","#4d4d4d","#999999",  "#e0e0e0" ))+
+    scale_y_continuous(name="Total deaths", limits=c(0, 1100))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+  theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Deaths by manner of death, by week in 2019", 
+       subtitle = "Line shows average natural deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+ 
+
+ggsave("./output/byweek_bymanner_2019.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+```{r warning=FALSE , message=FALSE}
+byweek_acc_2020 <-  deaths %>% filter(weeknumber<=wknumber, yr==2020, mannerdeath=='ACCIDENT') %>% group_by(weeknumber, deathtype) %>% summarise(tot=n())
+
+byweek_acc <-  deaths %>% filter(weeknumber<=wknumber, mannerdeath=='ACCIDENT') %>% group_by(yr, weeknumber) %>% summarise(tot=n())
+
+byweek_acc_avg <-  byweek_acc %>% filter(weeknumber<=wknumber, yr>=2015 & yr<2020) %>% group_by(weeknumber) %>% summarise(avg = mean(tot))
+
+
+
+ggplot(byweek_acc_2020)+
+geom_col(aes(x = weeknumber, y = tot, factor=deathtype, fill=deathtype, width = 0.7, stat="identity")) +
+  geom_line(data=byweek_acc_avg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("#e0f3db", "#a8ddb5", "#43a2ca" ))+
+    scale_y_continuous(name="Total deaths", limits=c(0,100))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+    theme_hc()+
+      labs(title = "Accidental deaths, by week in 2020", 
+       subtitle = "Line shows average accidental deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+
+ggsave("./output/byweek_acc_2020.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+
+```{r warning=FALSE, message=FALSE}
+byweek_acc_2019 <-  deaths %>% filter(weeknumber<=wknumber, yr==2019, mannerdeath=='ACCIDENT') %>% group_by(weeknumber, deathtype) %>% summarise(tot=n())
+
+byweek_acc <-  deaths %>% filter(weeknumber<=wknumber, mannerdeath=='ACCIDENT') %>% group_by(yr, weeknumber) %>% summarise(tot=n())
+
+byweek_acc_avg <-  byweek_acc %>% filter(weeknumber<=wknumber, yr>=2015 & yr<2020) %>% group_by(weeknumber) %>% summarise(avg = mean(tot))
+
+
+
+ggplot(byweek_acc_2019)+
+geom_col(aes(x = weeknumber, y = tot, factor=deathtype, fill=deathtype, width = 0.7, stat="identity"), show.legend = FALSE) +
+  geom_line(data=byweek_acc_avg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("#e0f3db", "#a8ddb5", "#43a2ca"  ))+
+    scale_y_continuous(name="Total deaths", limits=c(0, 100))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+    theme_hc()+
+      labs(title = "Accidental deaths, by week in 2019", 
+       subtitle = "Line shows average accidental deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+```
+
+
+
+```{r}
+accidents_YTD <- deaths %>% filter(weeknumber<=18, yr %in% c(2019, 2020), mannerdeath=='ACCIDENT') %>% group_by(yr, deathtype) %>% summarise(count=n())
+
+accidents_YTD <-  accidents_YTD %>% ungroup() %>%  mutate(yr = as.character(yr))
+
+
+ggplot(accidents_YTD) +
+  # add bar for each discipline colored by gender
+  geom_bar(aes(x = deathtype, y = count, fill = yr),
+           stat = "identity", position = "dodge") +
+  coord_flip()+
+    scale_fill_manual(values = c("#468189", "#9DBEBB")) +
+    theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "accidental deaths 2019 vs 2020", 
+       subtitle = "through week 18",
+       caption = "Graphic by MaryJo Webster")
+
+ggsave("./output/accTYD_2020.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+```{r warning=FALSE, message=FALSE}
+byweek_suc_2020 <-  deaths %>% filter(weeknumber<=wknumber, yr==2020, mannerdeath=='SUICIDE') %>% group_by(weeknumber, mannerdeath) %>% summarise(tot=n())
+
+byweek_suc <-  deaths %>% filter(weeknumber<=wknumber, mannerdeath=='SUICIDE') %>% group_by(yr, weeknumber) %>% summarise(tot=n())
+
+byweek_suc_avg <-  byweek_suc %>% filter(weeknumber<=wknumber, yr>=2015 & yr<2020) %>% group_by(weeknumber) %>% summarise(avg = mean(tot))
+
+
+
+ggplot(byweek_suc_2020)+
+geom_col(aes(x = weeknumber, y = tot, factor=mannerdeath, fill=mannerdeath, width = 0.7, stat="identity"), show.legend=FALSE) +
+  geom_line(data=byweek_suc_avg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("#a1d99b" ))+
+    scale_y_continuous(name="Total deaths", limits=c(0,50))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+    theme_hc()+
+      labs(title = "Suicide deaths, by week in 2020", 
+       subtitle = "Line shows average suicide deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+
+ggsave("./output/byweek_suc_2020.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+```{r warning=FALSE, message=FALSE}
+byweek_suc_2019 <-  deaths %>% filter(weeknumber<=wknumber, yr==2019, mannerdeath=='SUICIDE') %>% group_by(weeknumber, mannerdeath) %>% summarise(tot=n())
+
+
+
+ggplot(byweek_suc_2019)+
+geom_col(aes(x = weeknumber, y = tot, factor=mannerdeath, fill=mannerdeath, width = 0.7, stat="identity"), show.legend=FALSE) +
+  geom_line(data=byweek_suc_avg, aes(x=weeknumber, y=avg), size=1)+
+  scale_fill_manual(values = c("#a1d99b" ))+
+    scale_y_continuous(name="Total deaths", limits=c(0,50))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+    theme_hc()+
+      labs(title = "Suicide deaths, by week in 2019", 
+       subtitle = "Line shows average suicide deaths in past 5 years",
+       caption = "Graphic by MaryJo Webster")
+
+ggsave("./output/byweek_suc_2019.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+
+
+
+```{r warning=FALSE, message=FALSE}
+manner_YTD <- deaths %>% filter(weeknumber<=18, yr %in% c(2019, 2020), mannerdeath!='NATURAL', mannerdeath!='PENDING INVESTIGATION') %>% group_by(yr, mannerdeath) %>% summarise(count=n())
+
+manner_YTD <-  manner_YTD %>% ungroup() %>%  mutate(yr = as.character(yr))
+
+
+ggplot(manner_YTD) +
+  # add bar for each discipline colored by gender
+  geom_bar(aes(x = mannerdeath, y = count, fill = yr),
+           stat = "identity", position = "dodge") +
+  coord_flip()+
+    scale_fill_manual(values = c("#468189", "#9DBEBB")) +
+    theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Year-to-date deaths 2019 vs 2020", 
+       subtitle = "through week 18",
+       caption = "Graphic by MaryJo Webster")
+
+ggsave("./output/ytd_manner.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+```{r}
+manner_YTD_natural <- deaths %>% filter(weeknumber<=wknumber, yr %in% c(2019, 2020), mannerdeath=='NATURAL') %>% group_by(yr) %>% summarise(count=n())
+
+manner_YTD_natural <-  manner_YTD_natural %>% ungroup() %>%  mutate(yr = as.character(yr))
+
+
+ggplot(manner_YTD_natural, aes(x = yr, y = count, fill = yr)) +
+  # add bar for each discipline colored by gender
+  geom_bar(stat = "identity", position = "dodge", show.legend=FALSE) +
+  scale_y_continuous(name="Deaths", limits=c(0, 30000))+
+    scale_fill_manual(values = c("#468189", "#9DBEBB")) +
+    geom_text(stat="identity", label=manner_YTD_natural$count, vjust= -.5, size=4)+
+    theme_hc()+
+      labs(title = "Year-to-date natural deaths 2019 vs 2020", 
+       subtitle = subtitle,
+       caption = "Graphic by MaryJo Webster")
+```
+
+
+
+# COVID deaths by week of the year
+```{r}
+covid_by_week <-  deaths %>% filter(yr==2020, covidflag=='covid', weeknumber<=wknumber) %>% group_by(weeknumber) %>% summarise(count=n())
+
+covid_by_week <-  covid_by_week %>% ungroup() %>% mutate(weeknumber=as.character(weeknumber))
+
+ggplot(covid_by_week, aes(x = weeknumber, y = count)) +
+  # add bar for each discipline colored by gender
+  geom_bar(stat = "identity", fill="#9DBEBB") +
+  scale_y_continuous(name="Deaths", limits=c(0,250))+
+  geom_text(stat="identity", label=covid_by_week$count, vjust= -.5, size=4)+
+    theme_hc()+
+      labs(title = "COVID deaths by week", 
+       subtitle = subtitle,
+       caption = "Graphic by MaryJo Webster")
+```
+
+# All ages
+
+```{r}
+coviddeaths2020 <-  deaths %>% filter(yr==2020, covidflag=='covid') %>% group_by(weeknumber) %>% summarise(coviddeaths=n())
+
+totdeaths2020 <-  deaths %>% filter(yr==2020, weeknumber<=wknumber) %>% group_by(weeknumber) %>% summarise(totdeaths = n())
+
+
+ytddeaths <-  deaths %>% filter(weeknumber<=wknumber) %>% group_by(weeknumber, yr) %>% summarise(tot=n())
+
+avgdeaths <-  ytddeaths %>% filter(yr>=2015 & yr<2020) %>% group_by(weeknumber) %>%  summarise(avg = mean(tot))
+
+
+totdeaths2020 <- left_join(totdeaths2020, coviddeaths2020, by=c("weeknumber"="weeknumber"))
+
+totdeaths2020 <- left_join(totdeaths2020, avgdeaths, by=c("weeknumber"="weeknumber"))
+
+totdeaths2020$coviddeaths[is.na(totdeaths2020$coviddeaths)] <-  0
+
+write.csv(totdeaths2020, './output/totdeaths2020_allages.csv', row.names=FALSE)
+
+
+totdeaths2020 <-  totdeaths2020 %>% mutate(pct_diff = (totdeaths-avg)/avg) 
+
+ggplot(totdeaths2020, aes(x = weeknumber, y = pct_diff)) +
+  # add bar for each discipline colored by gender
+  geom_bar(stat = "identity", fill="#9DBEBB") +
+  scale_y_continuous(name="Percent", limits=c(-.2,.5), labels=percent)+
+  #geom_text(stat="identity", label=covid_by_week$count, vjust= -.5, size=4)+
+    theme_hc()+
+      labs(title = "Percent exceeding average- all ages", 
+       subtitle = subtitle,
+       caption = "Graphic by MaryJo Webster")
+```
+
+
+# Age 65 and older
+```{r}
+coviddeaths2020_65 <-  deaths65up %>% filter(yr==2020, covidflag=='covid') %>% group_by(weeknumber) %>% summarise(coviddeaths=n())
+
+totdeaths2020_65 <-  deaths65up %>% filter(yr==2020, weeknumber<=wknumber) %>% group_by(weeknumber) %>% summarise(totdeaths = n())
+
+
+ytddeaths65 <-  deaths65up %>% filter(weeknumber<=wknumber) %>% group_by(weeknumber, yr) %>% summarise(tot=n())
+
+avgdeaths65 <-  ytddeaths65 %>% filter(yr>=2015 & yr<2020) %>% group_by(weeknumber) %>%  summarise(avg = mean(tot))
+
+
+totdeaths2020_65 <- left_join(totdeaths2020_65, coviddeaths2020_65, by=c("weeknumber"="weeknumber"))
+
+totdeaths2020_65 <- left_join(totdeaths2020_65, avgdeaths65, by=c("weeknumber"="weeknumber"))
+
+totdeaths2020_65$coviddeaths[is.na(totdeaths2020_65$coviddeaths)] <-  0
+
+write.csv(totdeaths2020_65, './output/totdeaths2020_age65up.csv', row.names=FALSE)
+
+
+deaths2020_65_by_type <-  deaths %>% filter(yr==2020, ageyears>=65) %>% group_by(weeknumber, covidflag) %>% summarise(count=n())
+
+deaths2020_65_by_type <- pivot_wider(deaths2020_65_by_type, names_from=covidflag, values_from=count) %>% clean_names()
+
+write.csv(deaths2020_65_by_type, './output/deaths2020_65_bytype.csv', row.names=FALSE)
+
+totdeaths2020_65 <-  totdeaths2020_65 %>% mutate(pct_diff = (totdeaths-avg)/avg) 
+
+ggplot(totdeaths2020_65, aes(x = weeknumber, y = pct_diff)) +
+  # add bar for each discipline colored by gender
+  geom_bar(stat = "identity", fill="#9DBEBB") +
+  scale_y_continuous(name="Percent", limits=c(-.1,.5), labels=percent)+
+      scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+  #geom_text(stat="identity", label=covid_by_week$count, vjust= -.5, size=4)+
+    theme_hc()+
+      labs(title = "Percent exceeding average- 65 and up", 
+       subtitle = subtitle,
+       caption = "Graphic by MaryJo Webster")
+
+
+ggsave("./output/age65/over65_pctdifferencebyweek.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+# Under age 65
+```{r}
+coviddeaths2020_u65 <-  deathsunder65 %>% filter(yr==2020, covidflag=='covid') %>% group_by(weeknumber) %>% summarise(coviddeaths=n())
+
+totdeaths2020_u65 <-  deathsunder65 %>% filter(yr==2020, weeknumber<=wknumber) %>% group_by(weeknumber) %>% summarise(totdeaths = n())
+
+
+ytddeathsu65 <-  deathsunder65 %>% filter(weeknumber<=wknumber) %>% group_by(weeknumber, yr) %>% summarise(tot=n())
+
+avgdeathsu65 <-  ytddeathsu65 %>% filter(yr>=2015 & yr<2020) %>% group_by(weeknumber) %>%  summarise(avg = mean(tot))
+
+
+totdeaths2020_u65 <- left_join(totdeaths2020_u65, coviddeaths2020_u65, by=c("weeknumber"="weeknumber"))
+
+totdeaths2020_u65 <- left_join(totdeaths2020_u65, avgdeathsu65, by=c("weeknumber"="weeknumber"))
+
+totdeaths2020_u65$coviddeaths[is.na(totdeaths2020_u65$coviddeaths)] <-  0
+
+#write.csv(totdeaths2020_u65, './output/totdeaths2020_u65.csv', row.names=FALSE)
+
+
+totdeaths2020_u65 <-  totdeaths2020_u65 %>% mutate(pct_diff = (totdeaths-avg)/avg) 
+
+ggplot(totdeaths2020_u65, aes(x = weeknumber, y = pct_diff)) +
+  # add bar for each discipline colored by gender
+  geom_bar(stat = "identity", fill="#9DBEBB") +
+  scale_y_continuous(name="Percent", limits=c(-.40,.5), labels=percent)+
+    scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+  #geom_text(stat="identity", label=covid_by_week$count, vjust= -.5, size=4)+
+    theme_hc()+
+      labs(title = "Percent off average- Under age 65", 
+       subtitle = subtitle,
+       caption = "Graphic by MaryJo Webster")
+
+
+ggsave("./output/u65_pctdifferencebyweek.jpg", width=8, height=5, units="in", dpi="print")
+
+
+```
+
+
+# Total deaths since week 12
+
+```{r}
+deaths2020_weeks12_plus <- deaths %>% filter(weeknumber>=12 & weeknumber<=wknumber & yr==2020) %>% summarise(totdeaths = n())
+
+temp <-  deaths2020_weeks12_plus$totdeaths
+
+tot_per_yr_weeks12_plus <-  deaths %>% filter(weeknumber>=12 & weeknumber<=wknumber & yr!=2020) %>% group_by(yr) %>% summarise(totdeaths=n())
+
+avg_week12_plus <-  tot_per_yr_weeks12_plus %>% summarise(avg_deaths = mean(totdeaths))
+
+avg_week12_plus <-  avg_week12_plus %>% mutate(deaths2020=temp)
+
+avg_week12_plus %>% mutate(diff = deaths2020-avg_deaths,
+                           pct = percent((diff/avg_deaths),0)) %>% kable() %>% 
+    kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+  
+  
+```
+
+# Age 65 and older deaths since week 12
+```{r}
+
+
+deaths2020_weeks12_plus_65 <- deaths %>% filter(weeknumber>=12 & weeknumber<=wknumber & yr==2020 & ageyears>=65) %>% summarise(totdeaths = n())
+
+temp65 <-  deaths2020_weeks12_plus_65$totdeaths
+
+tot_per_yr_weeks12_plus_65 <-  deaths %>% filter(weeknumber>=12 & weeknumber<=wknumber & yr!=2020 & ageyears>=65) %>% group_by(yr) %>% summarise(totdeaths=n())
+
+avg_week12_plus_65 <-  tot_per_yr_weeks12_plus_65 %>% summarise(avg_deaths = mean(totdeaths))
+
+avg_week12_plus_65 <-  avg_week12_plus_65 %>% mutate(deaths2020=temp65)
+
+avg_week12_plus_65 %>% mutate(diff = deaths2020-avg_deaths,
+                           pct = percent((diff/avg_deaths),0)) %>% kable() %>% 
+    kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+# Under age 65 deaths since week 12
+```{r}
+deaths2020_weeks12_plus_u65 <- deaths %>% filter(weeknumber>=12 & weeknumber<=wknumber & yr==2020 & ageyears<65) %>% summarise(totdeaths = n())
+
+tempu65 <-  deaths2020_weeks12_plus_u65$totdeaths
+
+tot_per_yr_weeks12_plus_u65 <-  deaths %>% filter(weeknumber>=12 & weeknumber<=wknumber & yr!=2020 & ageyears<65) %>% group_by(yr) %>% summarise(totdeaths=n())
+
+avg_week12_plus_u65 <-  tot_per_yr_weeks12_plus_u65 %>% summarise(avg_deaths = mean(totdeaths))
+
+avg_week12_plus_u65 <-  avg_week12_plus_u65 %>% mutate(deaths2020=tempu65)
+
+avg_week12_plus_u65 %>% mutate(diff = deaths2020-avg_deaths,
+                           pct = percent((diff/avg_deaths),0)) %>% kable() %>% 
+    kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+```{r}
+
+```
+
+
+
+# COVID death demographics
+```{r}
+
+
+coviddeaths %>% group_by(gender) %>% summarise(count=n()) %>%
+  mutate(pct = percent(count/sum(count))) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+```{r}
+
+coviddeaths <-  coviddeaths %>% mutate(agegroup = case_when(ageyears>=100 ~ '100+',
+                                                            ageyears>=90 & ageyears<100 ~ '90-99',
+                                                            ageyears>=80 & ageyears<90 ~ '80-89',
+                                                            ageyears>=70 & ageyears<80 ~ '70-79',
+                                                            ageyears>=60 & ageyears<70 ~ '60-69',
+                                                            ageyears>=50 & ageyears<60 ~ '50-59',
+                                                             ageyears>=40 & ageyears<50 ~ '40-49',
+                                                             ageyears>=30 & ageyears<40 ~ '30-39',
+                                                            ageyears<30 ~ 'Under 30'),
+                                       big_age_group = case_when(ageyears>=50 ~'50+',
+                                                                 ageyears<20 ~'Under 20',
+                                                                 TRUE ~ '20-49'),
+                                       alt_age_group = case_when(ageyears>=85 ~ '85+',
+                                                                 ageyears>=65 & ageyears<85 ~ '65-84',
+                                                                 ageyears<65 ~ '30-64'))
+
+
+
+
+coviddeaths <-  coviddeaths %>% mutate(big_race_group = case_when(race=='White' ~'white',
+                                                                  race=='Unknown' ~ 'unknown',
+                                                                  TRUE ~ 'poc'),
+                                       race_group = case_when(race=='White' ~'White',
+                                                                  race=='Unknown' ~ 'Unknown',
+                                                              race=='African American' ~ 'Black',
+                                                              race=='American Indian'~'American Indian',
+                                                              race %in% c("Other Asian", "Filipino", "Vietnamese", "Japanese", "Chinese", "Korean")~'Asian',
+                                                              race=='Other Race' ~'Other'))
+
+
+#coviddeaths %>% group_by(big_race_group, agegroup) %>% summarise(count=n())%>% kable() %>% 
+ # kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+
+
+age_race <-  coviddeaths %>% group_by(big_race_group, agegroup) %>% summarise(count=n())
+age_race <-  pivot_wider(age_race, names_from=big_race_group, values_from=count) %>% rename(poc_deaths=poc, unknown_deaths=unknown, white_deaths=white)
+
+
+
+big_group_10yrage <-  left_join(big_group_10yrage, age_race, by=c("agegroup"="agegroup"))
+
+big_group_10yrage$poc_deaths[is.na(big_group_10yrage$poc_deaths)] <-  0
+big_group_10yrage$unknown_deaths[is.na(big_group_10yrage$unknown_deaths)] <-  0
+big_group_10yrage$white_deaths[is.na(big_group_10yrage$white_deaths)] <-  0
+
+big_group_10yrage <- big_group_10yrage %>% mutate(alternate_age_groups = case_when(agegroup %in% c("30-39", "40-49", "50-59")~'30-59',
+                                                                                   agegroup %in% c("90-99", "100+")~'90+',
+                                                                                   TRUE~agegroup))
+
+
+
+
+write.csv(big_group_10yrage, './output/age_race_chart_data.csv', row.names=FALSE)
+
+
+
+
+
+
+
+chart_age_race <-  big_group_10yrage %>% filter(poc_deaths+unknown_deaths+white_deaths>0) %>% 
+  group_by(alternate_age_groups) %>% summarise(poc_pop = sum(poc), white_pop = sum(white),
+                                               poc_dth = sum(poc_deaths),
+                                               unk_dth = sum(unknown_deaths),
+                                               white_dth = sum(white_deaths)) %>% 
+  mutate(pct_poc_pop = poc_pop/(poc_pop+white_pop),
+         pct_poc_deaths = poc_dth/(poc_dth+unk_dth+white_dth))
+
+
+chart_age_race <- chart_age_race %>% select(alternate_age_groups, pct_poc_pop, pct_poc_deaths) %>% pivot_longer(-alternate_age_groups, names_to="category", values_to="pct")
+
+ggplot(chart_age_race) +
+  geom_bar(aes(x = alternate_age_groups, y = pct, fill = category),
+           stat = "identity", position = "dodge") +
+  #coord_flip()+
+    scale_fill_manual(values = c("#468189", "#9DBEBB"), labels=c("Percent of COVID deaths", "Pct of population")) +
+  scale_y_continuous(labels=percent, name="Percent of age group") +
+  scale_x_discrete(name="Age groups")+
+    theme(legend.position="top",legend.title = element_blank())+
+  #geom_text(stat="identity", label=chart_age_race$pct, vjust= -.5, size=4)+
+   # theme_hc()+
+      labs(title = "People of color disproportionately represented", 
+       subtitle = subtitle,
+       caption = "Graphic by MaryJo Webster")
+
+ggsave("./output/age_race.jpg", width=8, height=5, units="in", dpi="print")
+
+write.csv(chart_age_race, './output/chart_age_race_data.csv', row.names=FALSE)
+
+```
+
+
+```{r}
+
+alt_age_race <-  coviddeaths %>% group_by(big_race_group, alt_age_group) %>% summarise(count=n())
+alt_age_race <-  pivot_wider(alt_age_race, names_from=big_race_group, values_from=count) %>% rename(poc_deaths=poc, unknown_deaths=unknown, white_deaths=white)
+
+
+
+
+
+
+
+alt_age_by_race_export <-  left_join(alt_age_by_race_export, alt_age_race, by=c("alt_age_group"="alt_age_group"))
+
+alt_age_by_race_export$poc_deaths[is.na(alt_age_by_race_export$poc_deaths)] <-  0
+alt_age_by_race_export$unknown_deaths[is.na(alt_age_by_race_export$unknown_deaths)] <-  0
+alt_age_by_race_export$white_deaths[is.na(alt_age_by_race_export$white_deaths)] <-  0
+
+
+write.csv(alt_age_by_race_export, './output/race_disparity_chart.csv', row.names=FALSE)
+
+
+
+chart_alt_age_race <-  alt_age_by_race_export %>% filter(poc_deaths+unknown_deaths+white_deaths>0) %>% 
+  group_by(alt_age_group) %>% summarise(poc_pop = sum(poc), white_pop = sum(white),
+                                               poc_dth = sum(poc_deaths),
+                                               unk_dth = sum(unknown_deaths),
+                                               white_dth = sum(white_deaths)) %>% 
+  mutate(pct_poc_pop = poc_pop/(poc_pop+white_pop),
+         pct_poc_deaths = poc_dth/(poc_dth+unk_dth+white_dth))
+
+
+chart_alt_age_race <- chart_alt_age_race %>% select(alt_age_group, pct_poc_pop, pct_poc_deaths) %>% pivot_longer(-alt_age_group, names_to="category", values_to="pct")
+
+ggplot(chart_alt_age_race) +
+  geom_bar(aes(x = alt_age_group, y = pct, fill = category),
+           stat = "identity", position = "dodge") +
+  #coord_flip()+
+    scale_fill_manual(values = c("#468189", "#9DBEBB"), labels=c("Percent of COVID deaths", "Pct of population")) +
+  scale_y_continuous(labels=percent, name="Percent of age group") +
+  scale_x_discrete(name="Age groups")+
+    theme(legend.position="top",legend.title = element_blank())+
+  #geom_text(stat="identity", label=chart_age_race$pct, vjust= -.5, size=4)+
+   # theme_hc()+
+      labs(title = "People of color disproportionately represented", 
+       subtitle = subtitle,
+       caption = "Graphic by MaryJo Webster")
+
+
+write.csv(chart_alt_age_race, './output/covid080220_race_graphic.csv', row.names=FALSE)
+```
+
+
+
+
+# Top 10 cities (by residence of person who died)
+```{r warning=FALSE, message=FALSE}
+coviddeaths %>% group_by(rescity) %>% summarise(count=n()) %>% top_n(10) %>% arrange(desc(count))%>% kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+```{r include=FALSE}
+coviddeaths %>% filter(ageyears<=65) %>%  group_by(occupation) %>% summarise(count=n()) %>% arrange(desc(count))
+```
+
+```{r include=FALSE}
+coviddeaths %>% filter(occupation %in% c("NURSE", "REGISTERED NURSE", "LPN", "PCA") &ageyears<65)
+```
+
+```{r include=FALSE}
+coviddeaths %>% group_by(yearseducation) %>% summarise(count=n()) %>% arrange(desc(count)) %>% mutate(pct = count/sum(count))
+```
+
+# Place of death
+```{r}
+coviddeaths %>% group_by( placetype) %>% summarise(count=n()) %>% mutate(pct=percent(count/sum(count))) %>% arrange(desc(pct))%>% kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+# Age
+```{r}
+
+
+
+
+coviddeaths %>% group_by( agegroup) %>% summarise(count=n()) %>% mutate(pct=percent(count/sum(count))) %>% arrange(desc(pct))%>% kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+```
+
+```{r}
+coviddeaths %>% filter(ageyears<40)
+```
+
+
+
+
+```{r movetoS3, eval=FALSE, echo=FALSE, results="hide"}
+
+
+#rmarkdown::render("highlights.Rmd")
+
+
+# specify keys as environment variables
+library(aws.s3)
+Sys.setenv("AWS_ACCESS_KEY_ID" =  rstudioapi::askForPassword("AWS_ACCESS_KEY_ID"),
+
+           "AWS_SECRET_ACCESS_KEY" = rstudioapi::askForPassword("AWS_SECRET_ACCESS_KEY"))
+
+get_bucket("strib-data-internal")
+
+
+put_object(file = "covid_deaths.html", object = "projects/covid/covid_deaths.html", bucket = "strib-data-internal")
+
+put_object(file = "covid_deaths.html", object = "projects/covid/covid_deaths.html", bucket = "strib-data-internal", acl=c("public-read"))
+
+
+
+
+
+
+
+
+```
+
+
+
