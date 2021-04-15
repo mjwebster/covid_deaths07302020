@@ -4,16 +4,20 @@ output: html_notebook
 ---
 
 ```{r}
+packages <- c("tidyverse", "janitor", "lubridate", "kableExtra", "RMySQL")
+if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
+  install.packages(setdiff(packages, rownames(installed.packages())), repos = "http://cran.us.r-project.org")  
+}
+
+
 
 # turn on libraries
-library(tidyverse)
-library(janitor)
-library(lubridate)
-library(stringr)
-library(kableExtra)
-library(RMySQL)
-library(forcats)
-options(scipen=999)
+library(tidyverse) 
+library(janitor) #this is for the clean_names function
+library(lubridate) #this is for working with dates
+library(kableExtra) #this is for some kable styling in a couple of the queries on this page
+library(RMySQL) #this is used for connecting to the mySQL server
+options(scipen=999) #avoid scientific notation
 
 
 ```
@@ -22,14 +26,18 @@ options(scipen=999)
 
 ```{r}
 
-# load weekly data file
-# set the path on line 51
+#before running this for the first time, set "adminuserid=" and "adminpwd=" in environ file using your credentials
+#for the mysql server
+#needs to be read/write privileges on the mySQL server for this to work
+
+#uncomment out and run the next line to edit your environ file
+#usethis::edit_r_environ()
+
+#when finished editing environ, need to close and restart RStudio
 
 
-
-
-
-    con <- dbConnect(RMySQL::MySQL(), host = Sys.getenv("host"), dbname="newsroomdata",user= Sys.getenv("adminuserid"), password=Sys.getenv("adminpwd"))
+#this connects to the server
+con <- dbConnect(RMySQL::MySQL(), host = Sys.getenv("host"), dbname="newsroomdata",user= Sys.getenv("adminuserid"), password=Sys.getenv("adminpwd"))
     
 dbSendQuery(con, "DROP TABLE old_deaths_covid")
 
@@ -48,6 +56,12 @@ dbSendQuery(con, "RENAME TABLE new_deaths_covid TO deaths_covid")
 Before running this, change the name/path of the csv file 
 
 ```{r}
+
+
+# load weekly data file
+# set the path on the next line
+
+
 dbSendQuery(con, "LOAD DATA LOCAL INFILE './data/weeklyfile.csv'
 INTO table deaths_covid fields terminated by ',' enclosed by '\"' lines terminated by  '\r\n' ignore 1 lines (@ST_FILE_NBR,@DECD_FRST_NME,@DECD_MIDD_NME,@DECD_LST_NME,@DECD_MAIDN_NME,@DECD_SUFX,@ALIAS_FRST_NME,@ALIAS_MIDD_NME,@ALIAS_LST_NME,
 @ALIAS_SUFX,@DECD_SEX,@DECD_AGE_TYPE,@DECD_AGE_YR,@DECD_AGE_MON,@DECD_AGE_DAY,@DECD_AGE_HR,@DECD_AGE_MIN,@DECD_BRTH_DT,@DECD_DTH_DT,
@@ -404,7 +418,7 @@ covid_table <-  fetch(pulldata, n=-1) %>% clean_names()
 ```
 
 
-# Presumed cases
+# review presumed cases
 ```{r}
 covid_table %>% filter(covidflag %in% c('presumed', 'PRESUMED')) %>%
   select(stateid, causea, causeb, causec, caused, causeother) %>% 
@@ -414,7 +428,7 @@ covid_table %>% filter(covidflag %in% c('presumed', 'PRESUMED')) %>%
 
 ```
 
-# Create files for tracker
+# Create file for tracker
 ```{r, message=FALSE, warning=FALSE}
 
 tracker <-  covid_table %>% 
@@ -425,6 +439,10 @@ tracker <-  covid_table %>%
 
 
 ```
+
+
+
+
 
 
 # export for reporters
@@ -441,6 +459,12 @@ write.csv(covid_table, paste(datafilename, '.csv', sep=""), row.names=FALSE)
 
 
 
+```
+
+
+```{r}
+#disconnect from server
+dbDisconnect(con)
 ```
 
 

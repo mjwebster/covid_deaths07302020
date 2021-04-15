@@ -89,7 +89,7 @@ covid_age_groups <-   age_singleyr2 %>% filter(age2!='NA', concept=='SEX BY AGE'
          age2==100 ~ '100+')) %>% 
   group_by(agegroup) %>% 
   summarise(totpeople = sum(value)) %>% 
-  mutate(pct_pop = totpeople/sum(totpeople))
+  mutate(pct_pop = totpeople/sum(totpeople))  #this pct_pop column would be the weight used to apply age-adjusted weighting
 
 
 #write.csv(covid_age_groups, 'covid_age_groups.csv', row.names=FALSE)
