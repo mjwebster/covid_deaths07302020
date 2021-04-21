@@ -130,17 +130,19 @@ write.csv(race_age, './data/mn_race_single_yr_age.csv', row.names=FALSE)
 # apply age groupings to race_age table
 
 # adjust groupings as needed below
-race_age <-  race_age %>% mutate(agegroup = case_when(age2 < 6 ~ '0-5',
-                                                                age2>=6 & age2 <=19 ~ '6-19',
-                                                                age2>=20 & age2<=29 ~ '20-29',
-                                                                age2>=30 & age2<=39 ~ '30-39',
-                                                                age2>=40 & age2<=49 ~ '40-49',
-                                                                age2>=50 & age2<=59 ~ '50-59',
-                                                                age2>=60 & age2<=69 ~ '60-69',
-                                                                age2>=70 & age2<=79 ~ '70-79',
-                                                                age2>=80 & age2<=89 ~ '80-89',
-                                                                age2>=90 & age2<=99 ~ '90-99',
-                                                                age2==100 ~ '100+'))
+race_age <-  race_age %>% mutate(agegroup = case_when(age2<=4 ~ '0-4',
+                                                                           age2>=5 & age2 <=9 ~ '5-9',
+                                                                           age2>=10 & age2 <=14 ~ '10-14',
+                                                                           age2>=15 & age2 <=19 ~ '15-19',
+                                                                           age2>=20 & age2<=29 ~ '20-29',
+                                                                           age2>=30 & age2<=39 ~ '30-39',
+                                                                           age2>=40 & age2<=49 ~ '40-49',
+                                                                           age2>=50 & age2<=59 ~ '50-59',
+                                                                           age2>=60 & age2<=69 ~ '60-69',
+                                                                           age2>=70 & age2<=79 ~ '70-79',
+                                                                           age2>=80 & age2<=89 ~ '80-89',
+                                                                           age2>=90 & age2<=99 ~ '90-99',
+                                                                           age2==100 ~ '100+'))
 
 
 # then summarize the table to get data by race and age group
@@ -151,7 +153,7 @@ race_age <-  race_age %>% mutate(agegroup = case_when(age2 < 6 ~ '0-5',
 #this generates a weight for each race/age group across whole population
 # (i.e. what percentage the 20-29 white people are within the whole population)
 race_by_agegroup <-  race_age %>% 
-  group_by(race_ethnicity, big_group, agegroup) %>% 
+  group_by(race_ethnicity,  agegroup) %>% 
   summarise(population = sum(pop)) %>% 
   ungroup() %>%  #need to ungroup in order to calculate the correct weighting
 mutate(weight = population/sum(population)) 

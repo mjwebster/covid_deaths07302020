@@ -3,7 +3,7 @@ title: "Importing death certificate data for COVID"
 output: html_notebook
 ---
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 packages <- c("tidyverse", "janitor", "lubridate", "kableExtra", "RMySQL")
 if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
   install.packages(setdiff(packages, rownames(installed.packages())), repos = "http://cran.us.r-project.org")  
@@ -22,6 +22,14 @@ options(scipen=999) #avoid scientific notation
 
 ```
 
+
+# change the name of the weekly zip file on both of the next two lines of code
+
+```{r}
+unzip('./data/Jan01-Apr20, 2021 Death File.zip', exdir='./data')
+
+file.rename('./data/Jan01-Apr20, 2021 Death File.csv', './data/weeklyfile.csv')
+```
 
 
 ```{r}
@@ -53,7 +61,7 @@ dbSendQuery(con, "RENAME TABLE new_deaths_covid TO deaths_covid")
 
 
 #Import csv file
-Before running this, change the name/path of the csv file 
+
 
 ```{r}
 
@@ -241,6 +249,17 @@ dbSendQuery(con, "UPDATE deaths_covid SET HISPANICETHNICITY='UNKNOWN' where hisp
 
 ```
 
+# Populate covidflag field for records we got previously
+```{r}
+
+dbSendQuery(con, "update deaths_covid
+inner join covidflag_lkup on deaths_covid.st_file_nbr = covidflag_lkup.st_file_nbr
+set deaths_covid.covidflag= covidflag_lkup.covidflag" )
+
+```
+
+
+
 
 # Find and flag the COVID cases
 ```{r, message=FALSE}
@@ -338,7 +357,7 @@ checkdata <-  fetch(data1, n=-1)
 
 checkdata %>% 
   kable() %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position="left")
+  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = F, position="left")
 ```
 
 
@@ -348,6 +367,24 @@ most recently this is cases that say they received the covid vaccine
 ```{r}
 dbSendQuery(con, "update deaths_covid set covidflag='FALSE' where st_file_nbr='2021-MN-010327'")
 ```
+
+
+# update the covidflag_lkup table
+```{r}
+
+#this drops the last backup copy and makes a backup copy of the existing one
+dbSendQuery(con, "DROP TABLE covidflag_lkup_old")
+dbSendQuery(con, "RENAME TABLE covidflag_lkup TO covidflag_lkup_old")
+
+#this creates the new one for use the next time the script is run
+dbSendQuery(con, "create table 
+covidflag_lkup
+SELECT ST_FILE_NBR, covidflag
+from deaths_covid")
+```
+
+
+
 
 
 # Create file for reporters
@@ -423,7 +460,7 @@ covid_table <-  fetch(pulldata, n=-1) %>% clean_names()
 covid_table %>% filter(covidflag %in% c('presumed', 'PRESUMED')) %>%
   select(stateid, causea, causeb, causec, caused, causeother) %>% 
   kable() %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position="left")
+  kable_styling(bootstrap_options = c("striped", "hover",  "responsive"), full_width = F, position="left")
 
 
 ```
@@ -513,3 +550,7 @@ put_object(file = tracker_path_filename, object = path_version_filename, bucket 
 
 
 ```
+
+
+
+
