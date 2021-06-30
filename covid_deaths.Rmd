@@ -36,14 +36,16 @@ library(forcats)
 
 
 ```{r warning=FALSE, message=FALSE}
-subtitle <-  'First 30 weeks of year'
-wknumber <- 30
+subtitle <-  'First 40 weeks of year'
+wknumber <- 40
 
 #import covid death file (this needs to be vetted in Excel before pulling in)
-coviddeaths <-  read_csv('./data/covid_death_jul29.csv', col_types=cols(.default=col_character(), AGEYEARS=col_double(), DEATHDATE=col_date("%m/%d/%Y %H:%M:%S"))) %>% clean_names()
+coviddeaths <-  read_csv('./data/covid_death_dec9.csv', col_types=cols(.default=col_character(), AGEYEARS=col_double(), DEATHDATE=col_date("%m/%d/%Y %H:%M:%S"))) %>% clean_names()
 
 
 big_group_10yrage <-  read_csv('./data/big_group_10yrage.csv')
+age_by_race_eth <-  read_csv('./data/age_by_race_eth.csv')
+alt_age_by_race_export <-  read_csv('./data/alt_age_by_race_export.csv')
 
 #pull in historical death data combined with 2020 data
 #note the month variable in the WHERE line that might need to be adjusted
@@ -60,7 +62,7 @@ con <- dbConnect(RMySQL::MySQL(), host = Sys.getenv("host"), dbname="newsroomdat
 #Pull selected data using query inside the parentheses
 data1 <- dbSendQuery(con, "select  deathdate, mannerdeath, ageyears, race, HISPANICETHNICITY, covidflag, deathtype, year(deathdate) as yr, month(deathdate) as mnth
 from deaths_main
-where year(deathdate)>2014 and month(deathdate)<8
+where year(deathdate)>2014 
 ")
 
 #assign it to a new data frame
@@ -84,6 +86,8 @@ dbDisconnect(con)
 
 deaths <-  bind_rows(deaths, deaths2020)
 
+
+#write.csv(deaths, './data/deaths2019.csv', row.names=FALSE)
 ```
 
 
@@ -154,7 +158,8 @@ deathsunder65 <-  deaths %>% filter(ageyears<65)
 overdoses <-  deaths %>% filter(deathtype=='overdose', weeknumber<=wknumber) %>% group_by(yr) %>% summarise(count=n())
 
 ggplot(overdoses, aes(x=yr, y=count))+
-  geom_bar(stat="identity")+
+  geom_line(stat="identity")+
+  scale_x_continuous(breaks=c(2015,2016, 2017, 2018, 2019, 2020))+
     theme_hc()+
       labs(title = "Overdose deaths", 
        subtitle = subtitle,
@@ -169,9 +174,6 @@ deaths %>% filter(deathtype=='overdose', weeknumber<=wknumber, yr==2020) %>% gro
 ```
 
 
-```{r}
-deaths %>% group_by(yr, weeknumber) %>% summarise(count=n())
-```
 
 
 
@@ -229,7 +231,7 @@ byweek2019 <-  deaths %>% filter(weeknumber<=wknumber, yr==2019) %>% group_by(we
 ggplot(byweek2019)+
 geom_col(aes(x = weeknumber, y = tot, factor=covidflag, fill=covidflag, width = 0.7, stat="identity")) +
   geom_line(data=byweekavg, aes(x=weeknumber, y=avg), size=1)+
-  scale_fill_manual(values = c("purple", "gray"))+
+  scale_fill_manual(values = c("purple",  "gray"))+
     scale_y_continuous(name="Total deaths", limits=c(0, 1100))+
   scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
     theme(legend.position="bottom",legend.title = element_blank())+
@@ -340,7 +342,7 @@ byweek_acc_avg <-  byweek_acc %>% filter(weeknumber<=wknumber, yr>=2015 & yr<202
 ggplot(byweek_acc_2020)+
 geom_col(aes(x = weeknumber, y = tot, factor=deathtype, fill=deathtype, width = 0.7, stat="identity")) +
   geom_line(data=byweek_acc_avg, aes(x=weeknumber, y=avg), size=1)+
-  scale_fill_manual(values = c("#e0f3db", "#a8ddb5", "#43a2ca" ))+
+  scale_fill_manual(values = c("#e0f3db", "#a8ddb5", "#43a2ca", "blue", "brown" ))+
     scale_y_continuous(name="Total deaths", limits=c(0,100))+
   scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
     theme_hc()+
@@ -377,24 +379,26 @@ geom_col(aes(x = weeknumber, y = tot, factor=deathtype, fill=deathtype, width = 
 
 
 ```{r}
-accidents_YTD <- deaths %>% filter(weeknumber<=18, yr %in% c(2019, 2020), mannerdeath=='ACCIDENT') %>% group_by(yr, deathtype) %>% summarise(count=n())
+accidents_YTD <- deaths %>% filter(weeknumber<=wknumber, yr %in% c(2019, 2020), mannerdeath=='ACCIDENT') %>% group_by(yr, deathtype) %>% summarise(count=n())
 
 accidents_YTD <-  accidents_YTD %>% ungroup() %>%  mutate(yr = as.character(yr))
 
 
-ggplot(accidents_YTD) +
+ggplot(accidents_YTD,aes(x = deathtype, y = count, fill=yr)) +
   # add bar for each discipline colored by gender
-  geom_bar(aes(x = deathtype, y = count, fill = yr),
-           stat = "identity", position = "dodge") +
-  coord_flip()+
+  geom_bar(stat = "identity", position = "dodge") +
+ # coord_flip()+
     scale_fill_manual(values = c("#468189", "#9DBEBB")) +
     theme(legend.position="bottom",legend.title = element_blank())+
+   geom_text(stat="identity", label=accidents_YTD$count, position=position_dodge(width=1), hjust=0, vjust=-.5,  size=3)+
     theme_hc()+
       labs(title = "accidental deaths 2019 vs 2020", 
-       subtitle = "through week 18",
+       subtitle = subtitle,
        caption = "Graphic by MaryJo Webster")
 
 ggsave("./output/accTYD_2020.jpg", width=8, height=5, units="in", dpi="print")
+
+
 ```
 
 
@@ -641,7 +645,16 @@ avg_week12_plus %>% mutate(diff = deaths2020-avg_deaths,
                            pct = percent((diff/avg_deaths),0)) %>% kable() %>% 
     kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
   
-  
+
+deaths %>% filter(weeknumber>=12 & weeknumber<=wknumber & yr==2020) %>% 
+  summarise(count=n())
+
+
+deaths %>% filter(weeknumber<=wknumber & yr!=2020) %>% 
+  group_by(yr) %>% 
+  summarise(count=n())
+
+deaths %>% filter(mannerdeath2=='covid', weeknumber>=12 & weeknumber<=wknumber & yr==2020) %>% summarise(count=n())
 ```
 
 # Age 65 and older deaths since week 12
@@ -696,6 +709,9 @@ coviddeaths %>% group_by(gender) %>% summarise(count=n()) %>%
   kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
 ```
 
+
+
+
 ```{r}
 
 coviddeaths <-  coviddeaths %>% mutate(agegroup = case_when(ageyears>=100 ~ '100+',
@@ -717,15 +733,21 @@ coviddeaths <-  coviddeaths %>% mutate(agegroup = case_when(ageyears>=100 ~ '100
 
 
 
-coviddeaths <-  coviddeaths %>% mutate(big_race_group = case_when(race=='White' ~'white',
+coviddeaths <-  coviddeaths %>% 
+  mutate(big_race_group = case_when(race=='White' & hispanicethnicity=='NOT HISPANIC' ~'white',
                                                                   race=='Unknown' ~ 'unknown',
                                                                   TRUE ~ 'poc'),
-                                       race_group = case_when(race=='White' ~'White',
+                                       race_group = case_when(race=='White' & hispanicethnicity=='NOT HISPANIC' ~'White',
                                                                   race=='Unknown' ~ 'Unknown',
-                                                              race=='African American' ~ 'Black',
-                                                              race=='American Indian'~'American Indian',
-                                                              race %in% c("Other Asian", "Filipino", "Vietnamese", "Japanese", "Chinese", "Korean")~'Asian',
-                                                              race=='Other Race' ~'Other'))
+                                       race=='African American' & hispanicethnicity=='NOT HISPANIC' ~ 'Black',
+                                                              race=='American Indian' & hispanicethnicity=='NOT HISPANIC' ~'American Indian',
+                                                              race %in% c("Other Asian", "Filipino", "Vietnamese", "Japanese", "Chinese", "Korean", "Asian Indian") & hispanicethnicity=='NOT HISPANIC' ~'Asian',
+                                                              race=='Other Race' & hispanicethnicity=='NOT HISPANIC' ~'Other',
+                                       hispanicethnicity=='HISPANIC' ~'Latino',
+                                       hispanicethnicity=='UNKNOWN' & race=='White'~'white',
+                                       hispanicethnicity=='UNKNOWN' & race=='Unknown' ~'unknown', 
+                                       race=='Black-multirace'~'Multirace',
+                                       race=='White-multirace'~'Multirace'))
 
 
 #coviddeaths %>% group_by(big_race_group, agegroup) %>% summarise(count=n())%>% kable() %>% 
@@ -733,6 +755,8 @@ coviddeaths <-  coviddeaths %>% mutate(big_race_group = case_when(race=='White' 
 
 
 age_race <-  coviddeaths %>% group_by(big_race_group, agegroup) %>% summarise(count=n())
+
+
 age_race <-  pivot_wider(age_race, names_from=big_race_group, values_from=count) %>% rename(poc_deaths=poc, unknown_deaths=unknown, white_deaths=white)
 
 
@@ -750,7 +774,7 @@ big_group_10yrage <- big_group_10yrage %>% mutate(alternate_age_groups = case_wh
 
 
 
-write.csv(big_group_10yrage, './output/age_race_chart_data.csv', row.names=FALSE)
+#write.csv(big_group_10yrage, './output/age_race_chart_data.csv', row.names=FALSE)
 
 
 
@@ -787,6 +811,24 @@ ggsave("./output/age_race.jpg", width=8, height=5, units="in", dpi="print")
 
 write.csv(chart_age_race, './output/chart_age_race_data.csv', row.names=FALSE)
 
+```
+
+
+
+```{r}
+coviddeaths %>% group_by(agegroup) %>% summarise(count=n()) %>% mutate(pct = count/sum(count))
+```
+
+
+```{r}
+coviddeaths %>% group_by(race_group) %>% summarise(count=n())
+```
+
+
+```{r}
+
+
+age_by_race_eth %>% group_by(race_group) %>% summarise(pop=sum(totpop)) %>% mutate(pct = pop/sum(pop)) %>% kable() %>% kable_styling()
 ```
 
 
@@ -842,6 +884,15 @@ write.csv(chart_alt_age_race, './output/covid080220_race_graphic.csv', row.names
 ```
 
 
+```{r}
+
+coviddeaths <- coviddeaths %>% mutate(race_group = case_when(race_group=='white'~'White', TRUE ~ race_group))
+
+
+coviddeaths %>% group_by(race_group) %>% summarise(numdeaths=n()) %>% mutate(pct=numdeaths/sum(numdeaths))
+```
+
+
 
 
 # Top 10 cities (by residence of person who died)
@@ -854,7 +905,7 @@ coviddeaths %>% group_by(rescity) %>% summarise(count=n()) %>% top_n(10) %>% arr
 coviddeaths %>% filter(ageyears<=65) %>%  group_by(occupation) %>% summarise(count=n()) %>% arrange(desc(count))
 ```
 
-```{r include=FALSE}
+```{r, warning=FALSE, message=FALSE }
 coviddeaths %>% filter(occupation %in% c("NURSE", "REGISTERED NURSE", "LPN", "PCA") &ageyears<65)
 ```
 
@@ -895,12 +946,13 @@ coviddeaths %>% filter(ageyears<40)
 library(aws.s3)
 Sys.setenv("AWS_ACCESS_KEY_ID" =  rstudioapi::askForPassword("AWS_ACCESS_KEY_ID"),
 
-           "AWS_SECRET_ACCESS_KEY" = rstudioapi::askForPassword("AWS_SECRET_ACCESS_KEY"))
+           "AWS_SECRET_ACCESS_KEY" = rstudioapi::askForPassword("AWS_SECRET_ACCESS_KEY"),
+           "AWS_DEFAULT_REGION" = "us-west-1")
 
 get_bucket("strib-data-internal")
 
 
-put_object(file = "covid_deaths.html", object = "projects/covid/covid_deaths.html", bucket = "strib-data-internal")
+put_object(file = "covid_deaths.html", object = "projects/covid/covid_deaths.html", bucket = "strib-data-internal", )
 
 put_object(file = "covid_deaths.html", object = "projects/covid/covid_deaths.html", bucket = "strib-data-internal", acl=c("public-read"))
 
@@ -908,6 +960,7 @@ put_object(file = "covid_deaths.html", object = "projects/covid/covid_deaths.htm
 
 
 
+?put_object()
 
 
 

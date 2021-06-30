@@ -68,7 +68,6 @@ age_singleyr2 <-  left_join(age_singleyr, variable_list, by=c("variable"="name")
 
 
 
-
 #New age groups for COVID tracker, as of Aug 20, 2020
 #this is 2010 single year by age data; newer data is not available
 # the filter for concept=sex by age is to filter out the race tables that are also in the original table
@@ -202,3 +201,61 @@ pacislander  <-  race_by_agegroup %>%
 weights_by_race_group <-  rbind(white, black, asian, americanindian, hispanic, pacislander)
 
 
+
+
+
+### Get 2010 ethnicity by race table for the metro area
+
+
+#pull from the variable list the specific ones I want (from single-year-by age, with race breakdowns)
+save_variables <-  variable_list %>% filter(str_sub(name, 1,4)== 'P005') %>% pull(name)
+
+#pull the data using get_decennial function from tidycensus
+#us_age_singleyr <-  get_decennial(geography = "us", variables = save_variables, year = "2010")
+metro_race_ethn <-  get_decennial(geography = "metropolitan statistical area/micropolitan statistical area",  variables = save_variables, year = "2010") %>% 
+  filter(GEOID=='33460')
+
+metro_race_ethn <-  left_join(metro_race_ethn, temp, by=c("variable"="name"))
+
+
+
+
+# single year of age, all tables, by county
+
+county_singleyear <-  get_decennial(geography = "county", state="MN", variables = save_variables, year = "2010")
+
+#filter to Hennepin and Ramsey
+
+county_singleyear <- county_singleyear %>%  filter(GEOID %in% c("27053", "27123")) %>% clean_names()
+
+#this will create a new dataframe for the remainder of the script
+county_singleyear <-  left_join(county_singleyear, variable_list, by=c("variable"="name")) %>%  #join with variables
+  clean_names()%>%  #clean the headers
+  separate("label", sep="!!", c("grp", "gender", "age"))%>%  #separate the label column
+  filter(age!='NA', gender!='NA') %>%   #eliminate the total rows that we don't want to keep   
+  mutate(age2 = case_when(age=='Under 1 year' ~ 0,
+                          age %in% c('100 to 104 years', '105 to 109 years', '110 years and over') ~ 100,
+                          age=='1 year'~ 1,
+                          str_detect(age,"years") ~ as.numeric(str_replace(age, " years", ""))))
+
+
+
+race_age_county <-  county_singleyear %>%
+  filter(str_sub(variable,1,7) %in% c("PCT012H", "PCT012I", "PCT012J","PCT012K","PCT012L","PCT012M","PCT012N","PCT012O" )) %>%
+  mutate(race_group = str_sub(concept, 12,200),
+         race_group = str_replace(race_group, '\\(', ''),
+         race_group = str_replace(race_group, '\\)', ''),
+         big_group = case_when(race_group=='WHITE ALONE, NOT HISPANIC OR LATINO' ~ 'WHITE',
+                               TRUE ~ 'POC'),
+         race_ethnicity = case_when(str_detect(race_group, "INDIAN")~ 'American Indian',
+                                    str_detect(race_group, "ASIAN") ~'Asian',
+                                    str_detect(race_group, 'BLACK')~ 'Black',
+                                    race_group=='HISPANIC OR LATINO'~ 'Hispanic',
+                                    str_detect(race_group, 'NATIVE HAWAIIAN')~ 'Pacific Islander',
+                                    str_detect(race_group, 'SOME OTHER')~ 'Other',
+                                    str_detect(race_group, 'TWO OR MORE')~ 'Multi',
+                                    str_detect(race_group, 'WHITE ALONE')~'White'))
+
+
+temp <-  race_age_county %>% filter(age2 %in% c("16", "17")) %>%  group_by(name, race_ethnicity) %>% summarise(pop = sum(value))
+write.csv(temp, 'race_16_17_hennepin_ramsey.csv', row.names=FALSE)

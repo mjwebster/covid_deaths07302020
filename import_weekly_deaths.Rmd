@@ -4,7 +4,7 @@ output: html_notebook
 ---
 
 ```{r, warning=FALSE, message=FALSE}
-packages <- c("tidyverse", "janitor", "lubridate", "kableExtra", "RMySQL")
+packages <- c("tidyverse", "janitor", "lubridate", "kableExtra", "RMySQL", "aws.s3")
 if (length(setdiff(packages, rownames(installed.packages()))) > 0) {
   install.packages(setdiff(packages, rownames(installed.packages())), repos = "http://cran.us.r-project.org")  
 }
@@ -18,7 +18,7 @@ library(lubridate) #this is for working with dates
 library(kableExtra) #this is for some kable styling in a couple of the queries on this page
 library(RMySQL) #this is used for connecting to the mySQL server
 options(scipen=999) #avoid scientific notation
-
+library(aws.s3)
 
 ```
 
@@ -26,9 +26,9 @@ options(scipen=999) #avoid scientific notation
 # change the name of the weekly zip file on both of the next two lines of code
 
 ```{r}
-unzip('./data/Jan01-Apr20, 2021 Death File.zip', exdir='./data')
+unzip('./data/Jan01-June29, 2021 Death File.zip', exdir='./data')
 
-file.rename('./data/Jan01-Apr20, 2021 Death File.csv', './data/weeklyfile.csv')
+file.rename('./data/Jan01-June29, 2021 Death File.csv', './data/weeklyfile.csv')
 ```
 
 
@@ -246,7 +246,7 @@ dbSendQuery(con, "UPDATE deaths_covid SET HISPANICETHNICITY='UNKNOWN' where hisp
 
 
 
-
+Sys.Date()
 ```
 
 # Populate covidflag field for records we got previously
@@ -255,6 +255,8 @@ dbSendQuery(con, "UPDATE deaths_covid SET HISPANICETHNICITY='UNKNOWN' where hisp
 dbSendQuery(con, "update deaths_covid
 inner join covidflag_lkup on deaths_covid.st_file_nbr = covidflag_lkup.st_file_nbr
 set deaths_covid.covidflag= covidflag_lkup.covidflag" )
+
+Sys.Date()
 
 ```
 
@@ -318,6 +320,8 @@ cause_dth_othr like '%SARS-COV%'
 
 
 ); ")
+
+Sys.Date()
 ```
 
 
@@ -336,8 +340,15 @@ or cause_dth_a like '%COVID 19 NEGATIVE%' OR
 CAUSE_DTH_A LIKE '%COVID NEGATIVE%' or 
 cause_dth_othr LIKE '%COVID-19 TEST NEGATIVE%'")
 
+
+#eliminate deaths where manner of death is listed as accident or suicide but covid was involved
+dbSendQuery(con, "update deaths_covid set covidflag='FALSE' where covidflag='covid' and (certfr_manner_dth='SUICIDE' or certfr_manner_dth='ACCIDENT') ")
+
+
 #this is a death from January 2020 that says "coronavirus" but we confirmed that it's not covid-19
 dbSendQuery(con, "UPDATE deaths_covid set covidflag='FALSE' WHERE  st_file_nbr='2020-MN-002678';")
+
+Sys.Date()
 
 ```
 
@@ -350,14 +361,15 @@ use the next query to fix any that got flagged wrong
 
 data1 <- dbSendQuery(con, "select ST_FILE_NBR, CAUSE_DTH_A, CAUSE_DTH_B, CAUSE_DTH_C, CAUSE_DTH_D, CAUSE_DTH_OTHR, DT_FILED_MED
 from deaths_covid
-where year(decd_dth_dt)=2021 and decd_dth_dt>'2021-04-01' and covidflag='covid' and RAC_ICD01<>'U071' and rac_icd02<>'U071' and RAC_ICD03<>'U071' and RAC_ICD04<>'U071'
+where year(decd_dth_dt)=2021 and decd_dth_dt>'2021-06-10' and covidflag='covid' and RAC_ICD01<>'U071' and rac_icd02<>'U071' and RAC_ICD03<>'U071' and RAC_ICD04<>'U071'
 order by dt_filed_med")
 
 checkdata <-  fetch(data1, n=-1)
 
 checkdata %>% 
   kable() %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "responsive"), full_width = F, position="left")
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = TRUE, position="center", font_size=12)
+
 ```
 
 
@@ -365,7 +377,9 @@ checkdata %>%
 most recently this is cases that say they received the covid vaccine
 
 ```{r}
-dbSendQuery(con, "update deaths_covid set covidflag='FALSE' where st_file_nbr='2021-MN-010327'")
+dbSendQuery(con, "update deaths_covid set covidflag='FALSE' where st_file_nbr='2021-MN-020636'")
+
+
 ```
 
 
@@ -519,15 +533,13 @@ write.csv(tracker, paste(trackerdatafilename, '.csv', sep=""), row.names=FALSE)
 
 
 
-library(aws.s3)
-
 #access the s3 bucket
-Sys.setenv("AWS_ACCESS_KEY_ID" =  rstudioapi::askForPassword("AWS_ACCESS_KEY_ID"),
+Sys.setenv("AWS_ACCESS_KEY_ID" =  Sys.getenv("strib_static_key_id"),
 
-           "AWS_SECRET_ACCESS_KEY" = rstudioapi::askForPassword("AWS_SECRET_ACCESS_KEY"),
+           "AWS_SECRET_ACCESS_KEY" =Sys.getenv("strib_static_secret_key"),
            "AWS_DEFAULT_REGION" = "us-west-2")
 
-get_bucket("static.startribune.com")
+#get_bucket("static.startribune.com")
 
 
 #push up the weekly overwrite file
