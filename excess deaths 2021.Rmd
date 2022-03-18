@@ -1,0 +1,617 @@
+---
+title: "Excess deaths 2021"
+output: html_notebook
+---
+
+
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(janitor)
+library(lubridate)
+library(stringr)
+library(kableExtra)
+library(formattable)
+library(DatawRappr)
+library(ggthemes)
+library(RMySQL)
+library(forcats)
+library(MMWRweek)
+library(scales)
+library(readxl)
+
+
+subtitle <-  '52 weeks of year'
+wknumber <- 52
+
+
+mnpop_by_age <- read_xlsx('./data/MNpop_SingleYearofAge_1980_2019.xlsx', sheet="data") %>% clean_names()
+
+
+mn_pop_groups <- mnpop_by_age %>% group_by(year, age_group) %>% summarise(tot = sum(estimate)) %>% mutate(yr = as.character(year))
+
+
+
+# create age groups for 2020 and 2021
+
+```
+
+
+
+```{r}
+
+#the 2021 death data was imported to the mySQL server
+#I combined numerous years of data into a table called "deaths_illdefined_analysis" to use for this
+#and another story that I might do
+#this chunk of code grabs a few years of that data, and only certain columns
+
+
+con <- dbConnect(RMySQL::MySQL(), host = Sys.getenv("host"), dbname="newsroomdata",user= Sys.getenv("userid"), password=Sys.getenv("pwd"))
+
+#list the tables in the database we've connected to
+#dbListTables(con)
+
+#list the fields in the table; change "mytablename" to the name of the table you're trying to connect to
+#dbListFields(con,'mytablename')
+
+
+#Pull selected data using query inside the parentheses
+data1 <- dbSendQuery(con, "select  ST_FILE_NBR,DECD_FRST_NME,DECD_MIDD_NME,DECD_LST_NME,DECD_MAIDN_NME,DECD_SUFX,DECD_AGE_YR,
+DECD_BRTH_DT,DECD_DTH_DT,DECD_BRTH_CNTRY,DECD_RES_NURSING,DECD_RES_FCLTY,DECD_RES_CTY,
+DECD_RES_ST,DECD_RES_ZIP5,DECD_RES_CNTY,DECD_RES_CNTY_FIPS_CD,DECD_MRTL_STATUS,
+CAUSE_DTH_A,CAUSE_INTRVL_A,CAUSE_DTH_B,CAUSE_INTRVL_B,CAUSE_DTH_C,CAUSE_INTRVL_C,CAUSE_DTH_D,CAUSE_INTRVL_D,CAUSE_DTH_OTHR,
+CERTFR_MANNER_DTH,DT_FILED_MED,DT_FILED_LEGL,CMPLT_FL,
+SUBJECT_NOT_HISPANIC,SUBJECT_MEXICAN,SUBJECT_PUERTO_RICAN,SUBJECT_CUBAN,SUBJECT_OTHER_SPANISH,SUBJECT_OTHR_SPAN_TXT,
+SUBJECT_REFUSED_HISPANIC,SUBJECT_UNKNOWN_HISPANIC,SUBJECT_NOTOBTAINABLE_HISPANIC,SUBJECT_WHITE,SUBJECT_AFRICAN_AMERICAN,SUBJECT_SOMALI,SUBJECT_ETHIOPIAN,
+SUBJECT_LIBERIAN,SUBJECT_KENYAN,SUBJECT_SUDANESE,SUBJECT_NIGERIAN,SUBJECT_GHANIAN,SUBJECT_OTHER_AFRICAN,SUBJECT_OTHER_AFRICAN_TXT,SUBJECT_AMERICAN_INDIAN,
+SUBJECT_TRIBE_TXT1,SUBJECT_TRIBE_TXT2,SUBJECT_ASIAN_INDIAN,SUBJECT_CHINESE,SUBJECT_FILIPINO,SUBJECT_JAPANESE,SUBJECT_KOREAN,SUBJECT_VIETNAMESE,
+SUBJECT_HMONG,SUBJECT_CAMBODIAN,SUBJECT_LAOTIAN,SUBJECT_OTHER_ASIAN,SUBJECT_OTHR_ASN_TXT1,SUBJECT_OTHR_ASN_TXT2,SUBJECT_HAWAIIAN,SUBJECT_GUAMANIAN_CHAMORRO,
+SUBJECT_SAMOAN,SUBJECT_OTHER_PACIFIC_ISLANDER,SUBJECT_OTHR_PAC_ISLE_TXT1,SUBJECT_OTHR_PAC_ISLE_TXT2,SUBJECT_OTHER,SUBJECT_OTHR_TXT1,
+SUBJECT_OTHR_TXT2,SUBJECT_REFUSED_RACE,SUBJECT_UNKNOWN,SUBJECT_NOTOBTAINABLE_RACE,SUBJECT_RACE_MVR,
+RAC_ICD01,RAC_CREATED01,RAC_ICD02,
+RAC_CREATED02,RAC_ICD03,RAC_CREATED03,RAC_ICD04,RAC_CREATED04,RAC_ICD05,RAC_CREATED05,RAC_ICD06,RAC_CREATED06,RAC_ICD07,RAC_CREATED07,RAC_ICD08,
+RAC_CREATED08,RAC_ICD09,RAC_CREATED09,RAC_ICD10,RAC_CREATED10,ACME_UNLY_CAUSE_DTH,MNL_UNLY_CAUSE_DTH,RACE,HISPANICETHNICITY,YR, covid2, mdhgroup, unly_cause_desc, opioids
+from deaths_illdefined_analysis
+where yr=2017 or yr=2018 or yr=2019 or yr=2020 or yr=2021")
+
+#assign it to a new data frame
+deaths <- fetch(data1, n=-1)
+
+dbClearResult(data1)
+
+
+#disconnect connection
+dbDisconnect(con)
+
+
+
+#####DATA CLEANUP:
+
+
+deaths <- deaths %>% clean_names() %>%  mutate(decd_dth_dt = lubridate::as_date(decd_dth_dt),
+                            decd_brth_dt = lubridate::as_date(decd_brth_dt),
+                            dt_filed_legl = lubridate::as_date(dt_filed_legl),
+                            dt_filed_med = lubridate::as_date(dt_filed_med)) 
+
+
+deaths$certfr_manner_dth[is.na(deaths$certfr_manner_dth)] <- 'not listed'
+
+
+
+
+
+
+
+
+#The first day of any MMWR week is Sunday. MMWR week numbering is sequential beginning with 1 and
+#incrementing with each week to a maximum of 52 or 53. MMWR week #1 of an MMWR year is the first week of
+#the year that has at least four days in the calendar year. For example, if January 1 occurs on a Sunday, Monday,
+#Tuesday or Wednesday, the calendar week that includes January 1 would be MMWR week #1. If January 1
+#occurs on a Thursday, Friday, or Saturday, the calendar week that includes January 1 would be the last MMWR
+#week of the previous year (#52 or #53). Because of this rule, December 29, 30, and 31 could potentially fall into
+#MMWR week #1 of the following MMWR year. 
+
+#this uses the MMWRweek package to assign the month, week and day from each date
+# the MMWRweek package creates a whole new dataframe when it does this so you first need to do that
+
+mmwrdates <- MMWRweek(deaths$decd_dth_dt)
+
+#then join (or bind) those columns to the covid data 
+#this also uses the clean_names function from janitor to lowercase the new columns
+deaths <- cbind(deaths, mmwrdates) %>% clean_names()
+
+
+#create a table that has the start and end dates of each week
+#this will be used again later
+week_start_end <-  deaths %>%
+  group_by(mmw_ryear, mmw_rweek) %>%
+  summarise(start_date = min(decd_dth_dt),
+            end_date = max(decd_dth_dt),
+            .groups='drop')
+
+
+# apply the start_date and end_date to covid table
+ deaths <-  left_join(deaths, week_start_end %>% select(mmw_ryear, mmw_rweek, start_date, end_date), by=c("mmw_ryear"="mmw_ryear", "mmw_rweek"="mmw_rweek" ))
+
+
+
+
+#categorize deaths by COVID or the manner of death for all other types of death 
+ deaths <-  deaths %>% mutate(death_type = case_when(covid2=='covid-unly'~ 'COVID',
+                                                     covid2!='covid-unly' | is.na(covid2) & certfr_manner_dth=='ACCIDENT' ~ 'Accident',
+                                                     covid2!='covid-unly'| is.na(covid2) & certfr_manner_dth=='SUICIDE' ~ 'Suicide',
+                                                     covid2!='covid-unly' | is.na(covid2)& certfr_manner_dth=='NATURAL' ~ 'Natural',
+                                                     covid2!='covid-unly' | is.na(covid2)& certfr_manner_dth=='HOMICIDE' ~ 'Homicide',
+                                                     covid2!='covid-unly' | is.na(covid2) & certfr_manner_dth %in% c("COULD NOT BE DETERMINED", "PENDING INVESTIGATION") ~ 'Accident',
+                                                     TRUE ~ 'unknown'))
+ 
+ 
+ #this is a more refined categorization where it breaks out the COVID deaths into those
+ #that more expressly define COVID deaths where it was listed as the underlying cause of death and others that didn't
+ 
+  deaths <-  deaths %>% mutate(death_type2 = case_when(covid2 %in% c('cov-no cod', 'covid-othr', 'presumed')~ 'COVID-other',
+                                                       covid2=='covid-unly' ~ 'COVID-underlying',
+                                                     covid2!='covid-unly'| is.na(covid2) & certfr_manner_dth=='ACCIDENT' ~ 'Accident',
+                                                     covid2!='covid-unly'| is.na(covid2) & certfr_manner_dth=='SUICIDE' ~ 'Suicide',
+                                                     covid2!='covid-unly' | is.na(covid2)& certfr_manner_dth=='NATURAL' ~ 'Natural',
+                                                     covid2!='covid-unly' | is.na(covid2)& certfr_manner_dth=='HOMICIDE' ~ 'Homicide',
+                                                     covid2!='covid-unly' | is.na(covid2) & certfr_manner_dth %in% c("COULD NOT BE DETERMINED", "PENDING INVESTIGATION") ~ 'Accident',
+                                                     TRUE ~ 'unknown'))
+
+
+ 
+
+```
+
+# Total deaths by year
+```{r}
+deaths %>% group_by(yr) %>% summarise(count=n())
+```
+
+
+
+# Deaths by week
+```{r}
+
+byweek2021 <-  deaths %>% filter(mmw_rweek<=wknumber, mmw_ryear==2021) %>% group_by(mmw_rweek, death_type) %>% summarise(tot=n())
+
+byweek <-  deaths %>% filter(mmw_rweek<=wknumber) %>% group_by(mmw_ryear, mmw_rweek) %>% summarise(tot=n())
+
+byweekavg <-  byweek %>% filter(mmw_rweek<=wknumber, mmw_ryear>=2010 & mmw_ryear<2020) %>% group_by(mmw_rweek) %>% summarise(avg = mean(tot))
+
+byweek2020 <- deaths %>% filter(mmw_rweek<=wknumber, mmw_ryear==2020) %>% group_by(mmw_ryear) %>% summarise(tot=n())
+
+
+byweek_lines <- deaths %>%  filter(mmw_rweek<=wknumber, mmw_ryear %in% c("2020", "2021")) %>% group_by(mmw_ryear, mmw_rweek) %>% summarise(tot=n()) %>% mutate(mmw_ryear_txt=as.character(mmw_ryear))
+
+byweekavg <-  byweekavg %>% mutate(mmw_ryear_txt='Avg 2010-2019', tot=avg)
+
+byweek_lines <- bind_rows(byweek_lines, byweekavg %>% select(-avg)) 
+
+
+ggplot(byweek_lines, aes(x=byweek_lines$mmw_rweek, y=tot, group=mmw_ryear_txt, color=mmw_ryear_txt))+
+  geom_line(stat="identity", size=1)+
+  scale_y_continuous(name="Total deaths", limits=c(0, 1500), breaks=seq(0, 1500, 300))+
+  scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+     theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Deaths by week", 
+       subtitle = subtitle,
+       caption = "Source: Minnesota death certificates")
+    
+
+  
+```
+
+
+```{r}
+ggsave("./output/total_weekly_deaths_2021.jpg", width=8, height=5, units="in", dpi="print")
+
+write.csv(pivot_wider(byweek_lines %>% ungroup() %>% select(-mmw_ryear), names_from ="mmw_ryear_txt", values_from="tot"), './output/table_deaths_by_week_2021.csv', row.names=FALSE)
+```
+
+
+# Deaths by type
+```{r}
+
+write.csv(pivot_wider(deaths %>% filter(yr>=2017) %>% 
+  group_by(yr, death_type) %>% summarise(count=n()), names_from=yr, values_from=count), './output/death_types_2021.csv', row.names=FALSE)
+
+pivot_wider(deaths %>% filter(yr>=2017) %>% 
+  group_by(yr, death_type) %>% summarise(count=n()), names_from=yr, values_from=count)
+
+
+```
+
+```{r}
+write.csv(pivot_wider(deaths %>% filter(yr>=2017) %>% 
+  group_by(yr, death_type2) %>% summarise(count=n()), names_from=yr, values_from=count), './output/alternate_death_types_2021.csv', row.names=FALSE)
+
+
+
+pivot_wider(deaths %>% filter(yr>=2017) %>% 
+  group_by(yr, death_type2) %>% summarise(count=n()), names_from=yr, values_from=count)
+```
+
+```{r}
+deaths$death_type2 <- factor(deaths$death_type2, levels=c("COVID-other",  "COVID-underlying", "unknown", "Homicide","Suicide", "Accident","Natural"  ))
+
+
+ggplot(deaths %>% filter(yr>=2017) %>% group_by(yr, death_type2) %>% summarise(count=n()) , aes(x=yr, y=count, fill=death_type2))+
+    geom_col(stat="identity", position="stack")+
+    scale_fill_manual(values = c("#ef8a62", "#b2182b", "#999999", "#1b7837","#762a83", "#67a9cf", "#f6e8c3" ))+
+  scale_y_continuous(limits=c(0,55000), breaks=seq(0,55000, 5000), labels=scales::comma)+
+  #theme_hc()+
+  labs(title="Minnesota deaths by type",
+        subtitle="2017-2021")
+
+
+ggsave("./output/total_deaths_by_type_2021.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+
+
+# Accidental deaths
+
+```{r}
+
+
+deaths %>% filter(opioids=='true', death_type2=='Accident') %>% group_by(yr) %>% summarise(count=n())
+
+```
+
+
+# Opioid deaths
+```{r}
+
+opioid_deaths <-  deaths %>% filter(opioids=='true', yr!=2008) %>% group_by(yr) %>% summarise(num_deaths=n()) %>% mutate(yr=as.numeric(yr))
+
+
+ggplot(data=opioid_deaths, aes(x=yr, y=num_deaths))+
+         geom_line(stat="identity")+
+  scale_y_continuous(limits=c(0,1200), breaks=seq(0,1200,100), name="Number of deaths")+
+  scale_x_continuous(breaks=seq(2009,2021, 1), name="Year")+
+  labs(title="Opioid-related deaths in MN",
+       subtitle="2008-2021",
+       caption= "2021 is preliminary")+
+  theme_hc()
+
+ggsave("./output/opioid_deaths_2008_2021.jpg", width=8, height=5, units="in", dpi="print")
+```
+
+# COVID deaths - average age over time
+
+```{r}
+
+                                                   
+                                                   
+ggplot(deaths %>% filter(covid2=='covid-unly') %>% mutate(mnthyr =  floor_date(decd_dth_dt, "month")) %>% group_by(mnthyr) %>% summarise(avgage = mean(decd_age_yr)), aes(x=mnthyr, y=avgage))+
+  geom_line(stat="identity")+
+  scale_y_continuous(limits=c(0,100))+
+      scale_x_date(date_breaks = "3 months", date_labels="%m-%y")+
+  labs(title="COVID deaths average age",
+       subtitle = "COVID as underlying cause of death" )+
+  theme_hc()
+
+```
+
+
+# COVID deaths under age 65
+
+```{r}
+ggplot(deaths %>% filter(covid2=='covid-unly', decd_age_yr<65) %>% mutate(mnthyr =  floor_date(decd_dth_dt, "month")) %>% group_by(mnthyr) %>% summarise(num_deaths = n()), aes(x=mnthyr, y=num_deaths))+
+  geom_bar(stat="identity")+
+  scale_y_continuous(limits=c(0,200))+
+      scale_x_date(date_breaks = "3 months", date_labels="%m-%y")+
+  labs(title="COVID deaths under age 65",
+       subtitle = "COVID as underlying cause of death" )+
+  theme_hc()
+```
+
+
+```{r}
+ggplot(deaths %>% filter(covid2=='covid-unly', decd_age_yr<65) %>%  group_by(yr) %>% summarise(num_deaths = n()), aes(x=yr, y=num_deaths))+
+  geom_bar(stat="identity")+
+  scale_y_continuous(limits=c(0,1200))+
+      #scale_x_date(date_breaks = "3 months", date_labels="%m-%y")+
+  labs(title="COVID deaths under age 65",
+       subtitle = "COVID as underlying cause of death" )+
+  theme_hc()
+```
+
+# Deaths by age groups
+
+```{r}
+
+deaths <-  deaths %>% mutate(age_group = case_when(decd_age_yr<18 ~ 'Under 18',
+                                                   decd_age_yr>=18 & decd_age_yr<=24 ~ '18 to 24',
+                                                   decd_age_yr>=25 & decd_age_yr<35 ~ '25 to 34',
+                                                   decd_age_yr>=35 & decd_age_yr<45 ~ '35 to 44',
+                                                   decd_age_yr>=45 & decd_age_yr<55 ~ '45 to 54',
+                                                   decd_age_yr>=55 & decd_age_yr<65 ~ '55 to 64',
+                                                   decd_age_yr>=65 & decd_age_yr<75 ~ '65 to 74',
+                                                   decd_age_yr>=75 & decd_age_yr<85 ~ '75 to 84',
+                                                   decd_age_yr>=85  ~ '85 and up',
+                                                   TRUE ~ 'unknown'))
+
+
+
+
+
+by_agegroup <-  deaths %>% filter(yr>=2018, decd_age_yr<65) %>%  group_by(yr, age_group) %>% summarise(total = n())
+
+by_agegroup <-  left_join(by_agegroup, mn_pop_groups, by=c("yr"="yr", "age_group"="age_group"))
+write.csv(deaths %>% group_by(yr, age_group) %>% summarise(total=n()), './output/by_agegroup_2021.csv', row.names=FALSE)
+
+ggplot(by_agegroup, aes(x=by_agegroup$yr, y=total, group=age_group, color=age_group))+
+  geom_line(stat="identity", size=1)+
+  #scale_y_continuous(name="Total deaths", limits=c(0, 1500), breaks=seq(0, 1500, 300))+
+  #scale_x_continuous(name="Week of the year", breaks=seq(1, wknumber, 2))+
+     theme(legend.position="bottom",legend.title = element_blank())+
+    theme_hc()+
+      labs(title = "Deaths by age group", 
+       subtitle = subtitle,
+       caption = "Source: Minnesota death certificates")
+
+
+#pivot_wider(deaths %>% filter(opioids=='true', yr %in% c(2017, 2018, 2019)) %>% group_by(yr, age_group) %>% summarise(count=n()), names_from="yr", values_from="count") 
+
+```
+
+
+
+# Deaths among age 45 to 64
+```{r}
+
+
+
+deaths <-  deaths %>% mutate(death_big_type = case_when(death_type2 %in% c("COVID-other", "COVID-underlying") ~ 'COVID', 
+                                                        TRUE ~ 'all other'))
+
+deaths$death_big_type <- factor(deaths$death_big_type, levels=c("COVID", "all other" ))
+
+
+ggplot(deaths %>% filter(age_group %in% c("55 to 64", "45 to 54")) %>%  group_by(yr, death_big_type) %>% summarise(num_deaths = n()), aes(x=yr, y=num_deaths, fill=death_big_type))+
+  geom_bar(stat="identity", position="stack")+
+ # scale_y_continuous(limits=c(0,1200))+
+      #scale_x_date(date_breaks = "3 months", date_labels="%m-%y")+
+  labs(title="Deaths age 45 to 64",
+       subtitle = "All causes" )+
+  theme_hc()
+
+
+
+
+```
+
+# Hispanic deaths
+
+```{r}
+deaths %>% filter(hispanicethnicity=='HISPANIC') %>% group_by(yr) %>% summarise(count=n())
+
+
+ggplot(deaths %>% filter(hispanicethnicity=='HISPANIC') %>% group_by(yr) %>% summarise(count=n()), aes(x=yr, y=count))+
+  geom_bar(stat="identity")+
+  labs(title='Hispanic deaths by year')
+```
+
+
+```{r}
+
+# in mySQL, I coded the deaths in a column called mdhgroup for the top 10 death categories (heart disease, cancer, accidents, etc). that column is stored in the ICD lookup table called icdcodes_revised_feb2022
+
+
+mdhgroup_deaths <-  pivot_wider(deaths %>% group_by(yr, mdhgroup) %>% summarise(count=n()), names_from="yr", values_from="count") %>% clean_names()
+
+#write.csv(mdhgroup_deaths, './output/mdhgroup_deaths_2021.csv', row.names=FALSE)
+```
+
+
+# Retrieve population by age data
+
+```{r}
+library(tidycensus)
+#retrieve census api key from my Renviron file
+census_api_key(Sys.getenv("CENSUS_API_KEY"))
+
+
+#load the variable list from census
+variable_list <- load_variables("2010", "sf1",  cache = FALSE)
+
+
+#pull from the variable list the specific ones I want (from single-year-by age, with race breakdowns)
+save_variables <-  variable_list %>% filter(str_sub(name, 1,6)== 'PCT012') %>% pull(name)
+
+#pull the data using get_decennial function from tidycensus
+#us_age_singleyr <-  get_decennial(geography = "us", variables = save_variables, year = "2010")
+age_singleyr <-  get_decennial(geography = "state", state="MN", variables = save_variables, year = "2010")
+
+
+age_singleyr2 <-  left_join(age_singleyr, variable_list, by=c("variable"="name")) %>%  #join with variables
+  clean_names()%>%  #clean the headers
+  separate("label", sep="!!", c("grp", "gender", "age"))%>%  #separate the label column
+  filter(age!='NA', gender!='NA') %>%   #eliminate the total rows that we don't want to keep   
+  mutate(age2 = case_when(age=='Under 1 year' ~ 0,
+                          age %in% c('100 to 104 years', '105 to 109 years', '110 years and over') ~ 100,
+                          age=='1 year'~ 1,
+                          str_detect(age,"years") ~ as.numeric(str_replace(age, " years", ""))))
+
+
+# create age by race/ethnicity table
+race_age <-  age_singleyr2 %>%
+  filter(str_sub(variable,1,7) %in% c("PCT012H", "PCT012I", "PCT012J","PCT012K","PCT012L","PCT012M","PCT012N","PCT012O" )) %>%
+  mutate(race_group = str_sub(concept, 12,200),
+         race_group = str_replace(race_group, '\\(', ''),
+         race_group = str_replace(race_group, '\\)', ''),
+         big_group = case_when(race_group=='WHITE ALONE, NOT HISPANIC OR LATINO' ~ 'WHITE',
+                               TRUE ~ 'POC'),
+         race_ethnicity = case_when(str_detect(race_group, "INDIAN")~ 'American Indian',
+                                    str_detect(race_group, "ASIAN") ~'Asian',
+                                    str_detect(race_group, 'BLACK')~ 'Black',
+                                    race_group=='HISPANIC OR LATINO'~ 'Hispanic',
+                                    str_detect(race_group, 'NATIVE HAWAIIAN')~ 'Pacific Islander',
+                                    str_detect(race_group, 'SOME OTHER')~ 'Other',
+                                    str_detect(race_group, 'TWO OR MORE')~ 'Multi',
+                                    str_detect(race_group, 'WHITE ALONE')~'White'))
+
+
+race_age <- race_age %>% mutate(agegroup = case_when(age2<=14 ~ '0-14',
+                                                     age2>=15 & age2 <=19 ~ '15-19',
+                                                     age2>=20 & age2<=24 ~ '20-24',
+                                                     age2>=25 & age2<=29 ~ '25-29',
+                                                     age2>=30 & age2<=34 ~ '30-34',
+                                                     age2>=35 & age2<=39 ~ '35-39',
+                                                     age2>=40 & age2<=44 ~ '40-44',
+                                                     age2>=45 & age2<=49 ~ '45-49',
+                                                     age2>=50 & age2<=54 ~ '50-54',
+                                                     age2>=55 & age2<=59 ~ '55-59',
+                                                     age2>=60 & age2<=64 ~ '60-64',
+                                                     age2>=65 & age2<=69 ~ '65-69',
+                                                     age2>=70 & age2<=74 ~ '70-74',
+                                                     age2>=75 & age2<=79 ~ '75-79',
+                                                     age2>=80 & age2<=84 ~ '80-84',
+                                                     age2>=85 ~ '85+'))
+
+
+race_age_totals <-  race_age %>% group_by(race_ethnicity, agegroup) %>% summarise(tot = sum(value))  
+
+race_age_totals <-  race_age_totals %>% mutate(race_ethnicity=toupper(race_ethnicity))
+
+
+
+
+```
+
+
+
+# Age-adjusted death rates
+```{r}
+
+deaths <-   deaths  %>% 
+  mutate(newrace = case_when(hispanicethnicity=='HISPANIC' ~ 'HISPANIC',
+                             hispanicethnicity!='HISPANIC' & race=='Other Race' ~ 'OTHER',
+                             hispanicethnicity!='HISPANIC' & race=='Other Asian' ~ 'ASIAN',
+                           hispanicethnicity!='HISPANIC' ~ toupper(race),
+                                      TRUE ~ 'unknown'),
+         new_age_group = case_when(decd_age_yr<15 ~ '0-14',
+                                              decd_age_yr>=15 & decd_age_yr<=19 ~ '15-19',
+                                              decd_age_yr>=20 & decd_age_yr<=24 ~ '20-24',
+                                   decd_age_yr>=25 & decd_age_yr<=29 ~ '25-29',
+                                           decd_age_yr>=30 & decd_age_yr<=34 ~ '30-34',
+                                    decd_age_yr>=35 & decd_age_yr<=39 ~ '35-39',
+                                           decd_age_yr>=40 & decd_age_yr<=44 ~ '40-44',
+                                    decd_age_yr>=45 & decd_age_yr<=49 ~ '45-49',
+                                           decd_age_yr>=50 & decd_age_yr<=54 ~ '50-54',
+                                    decd_age_yr>=55 & decd_age_yr<=59 ~ '55-59',
+                                           decd_age_yr>=60 & decd_age_yr<=64 ~ '60-64',
+                                    decd_age_yr>=65 & decd_age_yr<=69 ~ '65-69',
+                                           decd_age_yr>=70 & decd_age_yr<=74 ~ '70-74',
+                                    decd_age_yr>=75 & decd_age_yr<=79 ~ '75-79',
+                                           decd_age_yr>=80 & decd_age_yr<=84 ~ '80-84',
+                                               decd_age_yr>=85 ~ '85+',
+                                           TRUE ~ 'unk'))
+
+
+
+
+deaths_age_race_totals <-  deaths %>% group_by(yr, newrace, new_age_group) %>% summarise(deaths=n())
+
+
+deaths_age_race_totals <-  deaths_age_race_totals %>% mutate(newrace=toupper(newrace))
+
+deaths_age_race_totals <-  left_join(race_age_totals, deaths_age_race_totals,  by=c("race_ethnicity"="newrace", "agegroup"="new_age_group"))
+
+
+standard_pop <-  read_csv('./data/us_standard_pop_weights.csv')
+
+deaths_age_race_totals <-  left_join(deaths_age_race_totals, standard_pop, by=c("agegroup"="agegroup"))
+
+deaths_age_race_totals <-  deaths_age_race_totals %>% mutate(crude_rate = (deaths/tot)*10000,
+                                                             age_adjusted = crude_rate * weight)
+
+
+ggplot(deaths_age_race_totals %>% group_by(yr, race_ethnicity) %>% summarise(adjusted = sum(age_adjusted)) %>% filter(yr!='NA', race_ethnicity!='OTHER', race_ethnicity!='PACIFIC ISLANDER'), aes(x=yr, y=adjusted, group=race_ethnicity, col=race_ethnicity))+
+  geom_line(stat="identity")+
+  labs(title="Age-adjusted death rates by group",
+       subtitle="Per 10k")
+
+
+
+#write.csv(deaths_age_race_totals, './output/deaths_age_race_totals.csv', row.names=FALSE)
+
+#write.csv(race_age_totals, './output/race_age_population.csv', row.names=FALSE)
+```
+
+
+
+
+```{r}
+#write.csv(deaths_age_race_totals %>% group_by(yr, race_ethnicity) %>% summarise(adjusted = sum(age_adjusted)) %>% filter(yr!='NA', race_ethnicity!='OTHER', race_ethnicity!='PACIFIC ISLANDER'), './output/age_adjusted_death_rates_by_group.csv', row.names=FALSE)
+```
+
+# Crude death rates
+
+```{r}
+deaths_age_race_totals  %>% group_by(yr, race_ethnicity) %>% summarise(pop = sum(tot),
+                                                                                      dths = sum(deaths)) %>% 
+  mutate(crude_rate = (dths/pop)*10000) %>% 
+  arrange(race_ethnicity, yr)
+```
+
+
+```{r}
+write.csv(deaths_age_race_totals  %>% group_by(yr, agegroup) %>% summarise(pop = sum(tot),
+                                                                                      dths = sum(deaths)) %>% 
+  mutate(crude_rate = (dths/pop)*10000) %>% 
+  arrange(agegroup, yr), './output/crude_death_rates_by_age.csv', row.names=FALSE)
+```
+
+
+# COVID death rates by group
+```{r}
+
+covid_race_totals <-  deaths %>% filter(covid2 %in% c("covid-unly", "covid-othr")) %>%  group_by(newrace, new_age_group) %>% summarise(deaths=n())
+
+
+covid_race_totals <-  covid_race_totals %>% mutate(newrace=toupper(newrace))
+
+covid_race_totals <-  left_join(race_age_totals, covid_race_totals,  by=c("race_ethnicity"="newrace", "agegroup"="new_age_group"))
+
+covid_race_totals$deaths[is.na(covid_race_totals$deaths)] <-  0
+
+covid_race_totals %>% group_by(race_ethnicity) %>% summarise(pop = sum(tot), dths = sum(deaths)) %>% mutate(rate100k = (dths/pop)*100000 )
+```
+
+
+
+
+# Hispanic COVID deaths
+```{r}
+hispanic <-  deaths %>% filter(newrace=='HISPANIC')
+
+hispanic %>% filter(covid2 %in% c('covid-unly', 'covid-othr')) %>% 
+  group_by(yr) %>% summarise(count=n())
+```
+
+# COVID deaths age 50 and under
+```{r}
+deaths %>% filter(covid2 %in% c('covid-unly', 'covid-othr'), decd_age_yr<=50) %>% group_by(yr) %>%  summarise(count=n())
+
+
+```
+
+# COVID deaths under age 65
+```{r}
+deaths %>% filter(covid2 %in% c('covid-unly', 'covid-othr'), decd_age_yr<65) %>%  group_by(yr) %>% summarise(under65 = n())
+```
+
+
+# COVID deaths age 65 and older
+```{r}
+deaths %>% filter(covid2 %in% c('covid-unly', 'covid-othr'), decd_age_yr>=65) %>%  group_by(yr) %>% summarise(x65plus = n())
+```
+
+# COVID deaths age 85 and older
+```{r}
+deaths %>% filter(covid2 %in% c('covid-unly', 'covid-othr'), decd_age_yr>=85) %>%  group_by(yr) %>% summarise(x85plus = n())
+```
+

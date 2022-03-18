@@ -112,6 +112,23 @@ race_age <-  age_singleyr2 %>%
                                     str_detect(race_group, 'WHITE ALONE')~'White'))
 
 
+race_age <- race_age %>% mutate(agegroup = case_when(age2<=14 ~ '0-14',
+                                                     age2>=15 & age2 <=19 ~ '15-19',
+                                                     age2>=20 & age2<=29 ~ '20-29',
+                                                     age2>=30 & age2<=39 ~ '30-39',
+                                                     age2>=40 & age2<=49 ~ '40-49',
+                                                     age2>=50 & age2<=59 ~ '50-59',
+                                                     age2>=60 & age2<=69 ~ '60-69',
+                                                     age2>=70 & age2<=79 ~ '70-79',
+                                                     age2>=80 & age2<=89 ~ '80-89',
+                                                     age2>=90 & age2<=99 ~ '90-99',
+                                                     age2==100 ~ '100+'))
+
+
+race_age_totals <-  race_age %>% group_by(race_ethnicity, agegroup) %>% summarise(tot = sum(value))  
+
+                          
+
 #summarize to collapse the genders
 # add weighting for age adjusting
 
@@ -226,9 +243,11 @@ county_singleyear <-  get_decennial(geography = "county", state="MN", variables 
 
 #filter to Hennepin and Ramsey
 
-county_singleyear <- county_singleyear %>%  filter(GEOID %in% c("27053", "27123")) %>% clean_names()
+#county_singleyear <- county_singleyear %>%  filter(GEOID %in% c("27053", "27123")) %>% clean_names()
 
-#this will create a new dataframe for the remainder of the script
+county_singleyear <-  county_singleyear %>% clean_names()
+
+
 county_singleyear <-  left_join(county_singleyear, variable_list, by=c("variable"="name")) %>%  #join with variables
   clean_names()%>%  #clean the headers
   separate("label", sep="!!", c("grp", "gender", "age"))%>%  #separate the label column
@@ -257,5 +276,10 @@ race_age_county <-  county_singleyear %>%
                                     str_detect(race_group, 'WHITE ALONE')~'White'))
 
 
-temp <-  race_age_county %>% filter(age2 %in% c("16", "17")) %>%  group_by(name, race_ethnicity) %>% summarise(pop = sum(value))
-write.csv(temp, 'race_16_17_hennepin_ramsey.csv', row.names=FALSE)
+#temp <-  race_age_county %>% filter(age2 %in% c("16", "17")) %>%  group_by(name, race_ethnicity) %>% summarise(pop = sum(value))
+#write.csv(temp, 'race_16_17_hennepin_ramsey.csv', row.names=FALSE)
+
+
+race_age_county_grouped <-  race_age_county %>% group_by(geoid, name, age2, race_group) %>% summarise(tot=sum(value))
+
+write.csv(race_age_county_grouped, './output/pop2010_race_age_county_grouped.csv', row.names=FALSE)
